@@ -1,0 +1,8 @@
+{
+  "name": "Math Facts",
+  "short_name": "Math Facts",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b111a",
+  "theme_color": "#0b111a"
+}

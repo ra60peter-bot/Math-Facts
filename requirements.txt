@@ -1,0 +1,5 @@
+PySide6>=6.5
+sounddevice>=0.4.6
+numpy>=1.24
+vosk>=0.3.45
+pyinstaller>=6.0

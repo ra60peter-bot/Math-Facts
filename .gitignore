@@ -1,0 +1,26 @@
+# Python caches and environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local learner data and speech assets
+flashcards.db*
+remembered_answers.json
+voice_profiles.json
+vosk-model*/
+
+# Build output
+build/
+dist/
+*.spec.bak
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+
+# Editor and operating-system files
+.DS_Store
+Thumbs.db
+*.log
