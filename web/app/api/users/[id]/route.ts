@@ -7,9 +7,9 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
   const { id } = await params;
   if (id === auth.user.id) return NextResponse.json({ error: "You cannot delete your own administrator account." }, { status: 400 });
 
-  const { data: target, error: targetError } = await auth.service.from("profiles").select("id,email,is_admin").eq("id", id).single();
+  const { data: target, error: targetError } = await auth.service.from("profiles").select("id,email,role,is_admin").eq("id", id).single();
   if (targetError || !target) return NextResponse.json({ error: "User not found." }, { status: 404 });
-  if (target.is_admin) return NextResponse.json({ error: "Administrator accounts cannot be deleted here." }, { status: 400 });
+  if (target.role === "admin" || target.is_admin) return NextResponse.json({ error: "Administrator accounts cannot be deleted here." }, { status: 400 });
 
   const { error } = await auth.service.auth.admin.deleteUser(id);
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
