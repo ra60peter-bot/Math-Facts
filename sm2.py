@@ -1,4 +1,4 @@
-"""SM-2 spaced repetition algorithm (Anki-style)."""
+"""Legacy SM-2 helper retained for old integrations; the app uses FSRS."""
 
 from datetime import datetime, timedelta
 
