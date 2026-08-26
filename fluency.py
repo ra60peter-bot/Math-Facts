@@ -7,7 +7,8 @@ Key design decisions for intermittent learners:
   2. Overdue grace period — a 2-day gap between sessions is normal, not a failure
   3. MASTERED cards don't demote on slow answers — first answers after a break
      are naturally slower; only actual errors demote
-  4. Priority is driven by weakness (difficulty + speed), not just overdue time
+  4. FSRS due dates and retrievability drive cross-session priority; fluency
+     weakness (difficulty + speed) breaks ties
   5. Streaks persist across sessions — a kid who got 3×7 right on Monday keeps
      that streak on Wednesday unless they get it wrong
 
@@ -20,8 +21,15 @@ Evidence basis:
   - Desirable difficulties framework (Bjork & Bjork, 2011)
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import IntEnum
+
+from fsrs import Card as FSRSCard
+from fsrs import Rating as FSRSRating
+from fsrs import Scheduler as FSRSScheduler
+
+
+FSRS_SCHEDULER = FSRSScheduler(desired_retention=0.9, enable_fuzzing=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -108,6 +116,7 @@ def default_card_state():
         "interval_days":        0.0,
         "due_timestamp":        None,
         "last_seen_at":         None,
+        "fsrs_card_json":       None,
     }
 
 
@@ -116,7 +125,7 @@ def state_from_db_row(row) -> dict:
         "state", "total_attempts", "total_correct",
         "consecutive_correct", "consecutive_fast", "consecutive_failures",
         "rolling_avg_ms", "last_response_ms", "difficulty",
-        "interval_days", "due_timestamp", "last_seen_at",
+        "interval_days", "due_timestamp", "last_seen_at", "fsrs_card_json",
     ]
     d = default_card_state()
     for k in keys:
@@ -151,7 +160,7 @@ def grade_response(is_correct: bool, response_ms: int,
 # ═══════════════════════════════════════════════════════════════════════
 
 def update_card_state(state: dict, grade: Grade, response_ms: int,
-                      cfg: FluencyConfig = None) -> dict:
+                      cfg: FluencyConfig = None, now: datetime = None) -> dict:
     """Update card state after a review.
 
     State machine for irregular users:
@@ -168,12 +177,15 @@ def update_card_state(state: dict, grade: Grade, response_ms: int,
         cfg = FluencyConfig()
 
     s = dict(state)
-    now = datetime.now()
+    now = now or datetime.now()
 
     # ── Bookkeeping ─────────────────────────────────────────────────────
     s["total_attempts"] = s.get("total_attempts", 0) + 1
     s["last_response_ms"] = response_ms
     s["last_seen_at"] = now.isoformat()
+    s["fsrs_card_json"] = update_fsrs_card(
+        state.get("fsrs_card_json"), grade, response_ms, now
+    )
 
     # Rolling average response time (EMA)
     old_avg = s.get("rolling_avg_ms") or 0.0
@@ -347,7 +359,58 @@ def compute_priority(state: dict, cfg: FluencyConfig = None) -> float:
     fails = state.get("consecutive_failures") or 0
     fail_f = 1.0 + min(fails * 0.5, 2.0)
 
-    return base * overdue_f * diff_f * speed_f * fail_f
+    fluency_tie_breaker = base * overdue_f * diff_f * speed_f * fail_f
+    return compute_fsrs_priority(state) + min(fluency_tie_breaker, 9999)
+
+
+def update_fsrs_card(card_json, grade: Grade, response_ms: int,
+                     review_datetime: datetime = None) -> str:
+    """Review a card with FSRS at 90% desired retention and serialize it."""
+    try:
+        card = FSRSCard.from_json(card_json) if card_json else FSRSCard()
+    except (TypeError, ValueError):
+        card = FSRSCard()
+
+    reviewed_at = review_datetime or datetime.now(timezone.utc)
+    if reviewed_at.tzinfo is None:
+        reviewed_at = reviewed_at.astimezone(timezone.utc)
+    else:
+        reviewed_at = reviewed_at.astimezone(timezone.utc)
+    rating = {
+        Grade.AGAIN: FSRSRating.Again,
+        Grade.HARD: FSRSRating.Hard,
+        Grade.GOOD: FSRSRating.Good,
+        Grade.EASY: FSRSRating.Easy,
+    }[grade]
+    reviewed, _ = FSRS_SCHEDULER.review_card(
+        card, rating, review_datetime=reviewed_at, review_duration=response_ms
+    )
+    return reviewed.to_json()
+
+
+def compute_fsrs_priority(state: dict, now: datetime = None) -> float:
+    """Rank due FSRS cards first, then new cards, then future reviews."""
+    card_json = state.get("fsrs_card_json")
+    if not card_json:
+        return 500_000.0
+    try:
+        card = FSRSCard.from_json(card_json)
+    except (TypeError, ValueError):
+        return 500_000.0
+
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.astimezone(timezone.utc)
+    else:
+        current = current.astimezone(timezone.utc)
+    due = card.due.astimezone(timezone.utc)
+    if due <= current:
+        retrievability = FSRS_SCHEDULER.get_card_retrievability(card, current)
+        overdue_days = max(0.0, (current - due).total_seconds() / 86400)
+        return 1_000_000.0 + (1.0 - retrievability) * 100_000.0 + min(overdue_days, 365)
+
+    days_until_due = max((due - current).total_seconds() / 86400, 0.0)
+    return 100_000.0 / (1.0 + days_until_due)
 
 
 # ═══════════════════════════════════════════════════════════════════════
