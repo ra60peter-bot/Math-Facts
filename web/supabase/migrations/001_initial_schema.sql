@@ -41,7 +41,7 @@ create table if not exists public.card_states (
 create table if not exists public.practice_sessions (
   id uuid primary key,
   user_id uuid not null references public.profiles(id) on delete cascade,
-  operation text not null check (operation in ('add', 'mul')),
+  operation text not null check (operation in ('add', 'sub', 'mul')),
   started_at timestamptz not null,
   ended_at timestamptz not null
 );
@@ -51,7 +51,7 @@ create table if not exists public.attempts (
   session_id uuid not null references public.practice_sessions(id) on delete cascade,
   user_id uuid not null references public.profiles(id) on delete cascade,
   fact text not null,
-  operation text not null check (operation in ('add', 'mul')),
+  operation text not null check (operation in ('add', 'sub', 'mul')),
   is_correct boolean not null,
   answer_correct boolean not null,
   response_ms integer not null check (response_ms >= 0),
@@ -62,7 +62,7 @@ create table if not exists public.attempts (
 create table if not exists public.voice_mappings (
   user_id uuid not null references public.profiles(id) on delete cascade,
   heard_text text not null,
-  answer integer not null check (answer >= 0 and answer <= 144),
+  answer integer not null check (answer >= 0 and answer <= 225),
   updated_at timestamptz not null default now(),
   primary key (user_id, heard_text)
 );
