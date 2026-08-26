@@ -1,8 +1,16 @@
 # Math Facts Web App
 
-This folder is the new public, invite-only web version of the desktop app. It keeps the fluency thresholds, timed retries, mastery scoring, addition, and multiplication while replacing legacy priority scheduling with FSRS. Answers are voice-only.
+This folder is the new public, invite-only web version of the desktop app. It keeps the same fact ranges, fluency thresholds, timed retries, mastery scoring, and learning progression for addition, subtraction, and multiplication. Answers are voice-only.
 
-Scheduling uses FSRS, the modern scheduler supported by Anki. Wrong answers are recorded as Again, slow correct answers as Hard, normal correct answers as Good, and very fast correct answers as Easy. FSRS uses a 90% desired-retention target and stores independent scheduling state for every learner and math fact.
+Scheduling follows the desktop fluency model. Wrong answers are recorded as Again, slow correct answers as Hard, normal correct answers as Good, and very fast correct answers as Easy. Only a wrong answer demotes a fact; slow correct answers remain correct and receive a later within-session retry. Across sessions, both apps use FSRS at 90% desired retention: due reviews are selected first, followed by new facts and then future reviews. The fluency score breaks ties within those FSRS groups.
+
+Online access has three levels:
+
+- `impleader@gmail.com` is the sole bootstrap administrator and can use Google sign-in without an invitation.
+- Invited users sign in with their email and chosen password, or with Google when the Google account uses the invited email. Users can create and delete their own student profiles.
+- Students have no login. After an account owner signs in, a student selects their name from the dropdown. Students can choose facts and settings, practice, and view their own history; only the signed-in user or administrator can create or delete student profiles.
+
+Browser sessions persist across restarts and refresh automatically. They end only when the account signs out or Supabase invalidates the session.
 
 ## What you need
 
@@ -27,14 +35,15 @@ Open http://localhost:3000. Without Supabase variables, the app runs as a local 
 ## Set up Supabase
 
 1. Create a new Supabase project. Pick a strong database password and save it somewhere secure.
-2. In **SQL Editor**, run the files in `supabase/migrations` in numeric order. For a new project, `001_initial_schema.sql` creates the full schema; the later migrations are idempotent compatibility updates.
+2. In **SQL Editor**, run every file in `supabase/migrations` in numeric order, including `007_account_student_hierarchy.sql`. The last migration promotes an existing `impleader@gmail.com` profile and also makes a first-time Google sign-in by that address an active administrator.
 3. In **Authentication > URL Configuration**, set the Site URL to `http://localhost:3000` for local work. Add `http://localhost:3000/auth/callback` to Redirect URLs.
-4. In **Authentication > Providers > Email**, keep email enabled, require email confirmation, and disable public/self-service sign-ups. Invitations created by an administrator still work.
-5. In **Project Settings > API**, copy the Project URL and the publishable/anon key. In **Project Settings > API Keys**, copy the `service_role` key. The service-role key is server-only: never put it in a `NEXT_PUBLIC_` variable, commit it, or paste it into a browser console.
-6. Put the three values into `.env.local` using the field names in `.env.example`.
-7. Create the first administrator: in **Authentication > Users**, invite your own email address. Accept the invitation, set a password, then run the commented `update public.profiles ...` statement at the bottom of the migration with your email. From then on, the app's **Invite learner** form sends invitations itself.
+4. In **Authentication > Providers > Email**, keep email enabled, require email confirmation, and disable public/self-service sign-ups. Administrator invitations still work.
+5. In Google Cloud, create an OAuth web client. In Supabase **Authentication > Providers > Google**, copy Supabase's callback URL into the Google client's authorized redirect URIs, then put the Google client ID and secret into the Supabase provider settings. Add your local and deployed `/auth/callback` URLs to Supabase's redirect allow list.
+6. In **Project Settings > API**, copy the Project URL and the publishable/anon key. In **Project Settings > API Keys**, copy the `service_role` key. The service-role key is server-only: never put it in a `NEXT_PUBLIC_` variable, commit it, or paste it into a browser console.
+7. Put the three values into `.env.local` using the field names in `.env.example`.
+8. Sign in with Google as `impleader@gmail.com`. This creates or activates the administrator automatically. Use the **Admin** view to invite other users.
 
-Administrators get a **Users** view where they can send invitations, list accounts, inspect each learner's session history, and permanently delete non-administrator accounts. Deleting an account also deletes its progress, sessions, attempts, and voice mappings.
+Administrators get an **Admin** view where they can send invitations, list accounts, create or remove students under any account, inspect each student's session history, and permanently delete non-administrator accounts. Deleting an account or student also deletes the associated progress, sessions, attempts, and voice mappings.
 
 ## Put the code on GitHub
 
@@ -61,7 +70,7 @@ GitHub may ask you to sign in through a browser. Do not add `.env.local` to Git;
 4. Deploy. Vercel gives you a URL such as `https://math-facts-web.vercel.app`.
 5. Return to Supabase **Authentication > URL Configuration**. Change Site URL to the Vercel URL and add `https://YOUR-DOMAIN/auth/callback` as a redirect URL. Keep the localhost URLs too.
 6. Redeploy in Vercel so the invitation route uses the production domain.
-7. Test the complete loop: sign in as the administrator, invite a second email, accept the email invitation, set a password, sign in, complete a session on one computer, then confirm it appears after signing in on another.
+7. Test the complete loop: sign in to Google as `impleader@gmail.com`, invite a second email, accept the email invitation, set a password, create a student, complete a session, refresh the browser to verify the login persists, and confirm the student's session appears in the administrator view.
 
 Vercel Pro and Supabase Pro are reasonable paid production choices once usage justifies them. Start with their current free tiers only if their current limits fit your expected number of users and sessions; review the current pricing pages before choosing a plan.
 
@@ -82,8 +91,8 @@ For true offline voice in V2, replace the browser recognizer with a WebAssembly 
 
 ## Project structure
 
-- `app/`: Next.js pages, invitation endpoint, global styles.
+- `app/`: Next.js pages, invitation, student, and administrator endpoints, and global styles.
 - `components/math-facts-app.tsx`: voice-only practice flow and desktop UI.
-- `lib/learning.ts`: port of the desktop fluency algorithm.
+- `lib/learning.ts` and `lib/fsrs-scheduler.ts`: shared fluency grading and FSRS review ordering.
 - `lib/cloud-progress.ts`: Supabase cross-device synchronization.
-- `supabase/migrations/001_initial_schema.sql`: account, progress, session, and RLS schema.
+- `supabase/migrations/`: account, student, progress, session, invitation, and row-level-security schema.
