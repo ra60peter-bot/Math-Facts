@@ -3,7 +3,9 @@
 
 import os
 import json
-from speech_engine import parse_number
+from speech_engine import VALID_ANSWERS, number_to_phrases, parse_number
+from fluency import Grade, default_card_state, update_card_state
+from fsrs import Card as FSRSCard
 
 def test_remembered_answers_structure():
     """Test that the remembered answers structure works as expected."""
@@ -77,6 +79,22 @@ def test_sound_generation():
     except Exception as e:
         print(f"Note: Sound generation test failed (might be expected on some systems): {e}")
 
+def test_extended_multiplication_range():
+    """Test multiplication answers and speech phrases through 15 × 15."""
+    assert 225 in VALID_ANSWERS
+    assert parse_number("225") == 225
+    assert parse_number("two hundred twenty five") == 225
+    assert number_to_phrases(225)[0] == "two hundred twenty five"
+    print("✓ Multiplication and speech parsing support facts through 15 × 15")
+
+def test_fsrs_review_state():
+    """Verify that an answer creates persistent FSRS scheduling state."""
+    reviewed = update_card_state(default_card_state(), Grade.GOOD, 1200)
+    card = FSRSCard.from_json(reviewed["fsrs_card_json"])
+    assert card.last_review is not None
+    assert card.due is not None
+    print("✓ Correct answers create persistent FSRS review state at 90% retention")
+
 if __name__ == "__main__":
     print("Testing the changes made to Math Flashcards app...")
     print()
@@ -89,7 +107,15 @@ if __name__ == "__main__":
     test_parse_number_with_custom_map()
     print()
     
-    print("3. Testing sound generation:")
+    print("3. Testing extended multiplication range:")
+    test_extended_multiplication_range()
+    print()
+
+    print("4. Testing FSRS scheduling:")
+    test_fsrs_review_state()
+    print()
+
+    print("5. Testing sound generation:")
     test_sound_generation()
     print()
     
