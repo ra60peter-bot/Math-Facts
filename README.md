@@ -9,7 +9,7 @@ Built for **Miles** and **Violet** — each user's history is saved across sessi
 - **Voice recognition** (Vosk, offline) — say the answer out loud, or type it
 - **Timed responses** — tracks how quickly you answer each fact
 - **Within-session retry** — incorrect or slow answers reappear later in the session
-- **Across-session spaced repetition** (SM-2 / Anki-style) — hard facts come back sooner in future sessions
+- **Across-session spaced repetition** (FSRS, the modern Anki scheduler) — due and difficult facts come back sooner in future sessions
 - **Session results** — accuracy %, average time, slowest facts
 - **History & trends** — track improvement over time for each user
 
@@ -21,7 +21,7 @@ Built for **Miles** and **Violet** — each user's history is saved across sessi
 pip install -r requirements.txt
 ```
 
-Requires **Python 3.9+**. Dependencies: PySide6, vosk, sounddevice, numpy.
+Requires **Python 3.10+**. Dependencies include PySide6, vosk, sounddevice, numpy, and `fsrs`.
 
 ### 2. Download the speech model
 
@@ -66,7 +66,7 @@ work. The app still supports typed answers if microphone access is denied.
 
 ### Setup Screen
 - Select user (Miles or Violet)
-- Choose number of questions (50–1000)
+- Choose number of questions (10–100; defaults to 50)
 - Mic status indicator shows whether voice recognition is ready
 - Click **Start Practice**
 
@@ -93,7 +93,7 @@ The app uses two layers:
 
 1. **Within-session** — If you get a fact wrong or answer slowly (top 20% slowest), it reappears ~7 cards later (up to 3 retries per card).
 
-2. **Across-session** (SM-2) — Each fact has an ease factor, interval, and due date. Hard facts are scheduled sooner. Facts due for review are shown first each session.
+2. **Across-session** (FSRS at 90% desired retention) — Each answer updates a serialized FSRS card. Due reviews are shown first, then new facts, then future reviews. Response speed still determines Again/Hard/Good/Easy and breaks ties between facts in the same FSRS group.
 
 ## Data Storage
 
