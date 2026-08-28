@@ -42,21 +42,21 @@ function ratingFor(grade: Grade) {
 }
 
 export function reviewCardState(previous: CardState, grade: Grade, responseMs: number, now = new Date()): CardState {
-  const metrics = updateCardState(previous, grade, responseMs);
+  const metrics = updateCardState(previous, grade, responseMs, now);
   const reviewed = scheduler.next(deserialize(previous.fsrs, now), now, ratingFor(grade)).card;
   return {
     ...metrics,
-    dueAt: reviewed.due.toISOString(),
-    intervalDays: reviewed.scheduled_days,
     fsrs: serialize(reviewed),
   };
 }
 
-export function fsrsPriority(state: CardState, now = new Date()) {
-  if (!state.fsrs) return 1_000_000;
+export function fsrsRank(state: CardState, now = new Date()) {
+  if (!state.fsrs) return { bucket: 1, value: 0 };
   const card = deserialize(state.fsrs, now);
-  const dueDeltaDays = (now.getTime() - card.due.getTime()) / 86_400_000;
-  const retrievability = scheduler.get_retrievability(card, now, false);
-  if (dueDeltaDays >= 0) return 500_000 + ((1 - retrievability) * 100_000) + Math.min(dueDeltaDays, 365);
-  return ((1 - retrievability) * 100_000) + dueDeltaDays;
+  const dueAt = card.due.getTime();
+  if (dueAt <= now.getTime()) {
+    const retrievability = Number(scheduler.get_retrievability(card, now, false));
+    return { bucket: 0, value: Number.isFinite(retrievability) ? retrievability : 0 };
+  }
+  return { bucket: 2, value: dueAt };
 }

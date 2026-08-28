@@ -25,8 +25,8 @@ def _compute_valid_answers():
     for a in range(0, 10):
         for b in range(0, 10):
             answers.add(a + b)
-    for a in range(2, 13):
-        for b in range(2, 13):
+    for a in range(2, 16):
+        for b in range(2, 16):
             answers.add(a * b)
     return sorted(answers)
 
@@ -48,35 +48,33 @@ _TENS = {
     6: "sixty", 7: "seventy", 8: "eighty", 9: "ninety",
 }
 
-def number_to_phrases(n):
-    if n < 0 or n > 200:
-        return []
-    phrases = []
+def _under_hundred_to_word(n):
     if n <= 19:
-        phrases.append(_ONES[n])
+        return _ONES[n]
+    tens, ones = divmod(n, 10)
+    return _TENS[tens] if ones == 0 else f"{_TENS[tens]} {_ONES[ones]}"
+
+
+def number_to_phrases(n):
+    if n < 0 or n > 225:
+        return []
+    if n < 100:
+        phrases = [_under_hundred_to_word(n)]
         if n == 0:
             phrases.append("oh")
-    elif n < 100:
-        tens, ones = divmod(n, 10)
-        if ones == 0:
-            phrases.append(_TENS[tens])
-        else:
-            phrases.append(f"{_TENS[tens]} {_ONES[ones]}")
-    elif n == 100:
-        phrases.append("one hundred")
-        phrases.append("hundred")
-    else:
-        remainder = n - 100
-        if remainder <= 19:
-            rem_word = _ONES[remainder]
-        else:
-            tens, ones = divmod(remainder, 10)
-            rem_word = _TENS[tens] if ones == 0 else f"{_TENS[tens]} {_ONES[ones]}"
-        phrases.append(f"one hundred {rem_word}")
+        return phrases
+
+    hundreds, remainder = divmod(n, 100)
+    prefix = f"{_ONES[hundreds]} hundred"
+    if remainder == 0:
+        return [prefix, "hundred"] if hundreds == 1 else [prefix]
+
+    rem_word = _under_hundred_to_word(remainder)
+    phrases = [f"{prefix} {rem_word}"]
+    if hundreds == 1:
         phrases.append(f"hundred {rem_word}")
         if remainder < 10:
-            phrases.append(f"one oh {rem_word}")
-            phrases.append(f"one o {rem_word}")  # "one o eight" variant
+            phrases.extend((f"one oh {rem_word}", f"one o {rem_word}"))
         else:
             phrases.append(f"one {rem_word}")
     return phrases

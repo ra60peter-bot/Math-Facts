@@ -53,6 +53,7 @@ class Database:
                 last_response_ms     INTEGER DEFAULT 0,
                 difficulty           REAL    DEFAULT 0.3,
                 last_seen_at         TEXT,
+                fsrs_card_json       TEXT,
                 PRIMARY KEY (user_id, card_id),
                 FOREIGN KEY (user_id) REFERENCES users(id),
                 FOREIGN KEY (card_id) REFERENCES cards(id)
@@ -158,6 +159,7 @@ class Database:
             ("last_response_ms",     "INTEGER DEFAULT 0"),
             ("difficulty",           "REAL    DEFAULT 0.3"),
             ("last_seen_at",         "TEXT"),
+            ("fsrs_card_json",       "TEXT"),
         ]
         for col_name, col_def in fluency_columns:
             try:
@@ -187,9 +189,9 @@ class Database:
                     "INSERT OR IGNORE INTO cards(op, a, b) VALUES('sub', ?, ?)",
                     (a, b),
                 )
-        # Multiplication: 2-12 × 2-12
-        for a in range(2, 13):
-            for b in range(2, 13):
+        # Multiplication: 2-15 × 2-15
+        for a in range(2, 16):
+            for b in range(2, 16):
                 c.execute(
                     "INSERT OR IGNORE INTO cards(op, a, b) VALUES('mul', ?, ?)",
                     (a, b),
@@ -260,7 +262,7 @@ class Database:
         with self._lock:
             return self.conn.execute("SELECT * FROM cards WHERE id=?", (card_id,)).fetchone()
 
-    # ── User-Card State (SM-2) ──────────────────────────────────────────
+    # ── User-Card State (FSRS + fluency metrics) ─────────────────────────
 
     def get_user_card_state(self, user_id, card_id):
         with self._lock:
@@ -335,8 +337,9 @@ class Database:
                     user_id, card_id, state, total_attempts, total_correct,
                     consecutive_correct, consecutive_fast, consecutive_failures,
                     rolling_avg_ms, last_response_ms, difficulty,
-                    interval_days, due_timestamp, last_seen_at, total_time_ms
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    interval_days, due_timestamp, last_seen_at, fsrs_card_json,
+                    total_time_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                           COALESCE((SELECT total_time_ms FROM user_card_state
                                     WHERE user_id=? AND card_id=?), 0) + ?)
                 ON CONFLICT(user_id, card_id) DO UPDATE SET
@@ -352,6 +355,7 @@ class Database:
                     interval_days        = excluded.interval_days,
                     due_timestamp        = excluded.due_timestamp,
                     last_seen_at         = excluded.last_seen_at,
+                    fsrs_card_json       = excluded.fsrs_card_json,
                     total_time_ms        = total_time_ms + ?
                 """,
                 (
@@ -368,6 +372,7 @@ class Database:
                     s.get("interval_days", 0),
                     s.get("due_timestamp"),
                     s.get("last_seen_at"),
+                    s.get("fsrs_card_json"),
                     user_id, card_id,  # for the subquery
                     s.get("last_response_ms", 0),  # add to total_time_ms (INSERT)
                     s.get("last_response_ms", 0),  # add to total_time_ms (UPDATE)
@@ -467,7 +472,6 @@ class Database:
             grade_response, update_card_state, default_card_state, state_from_db_row,
             LEARNING, REVIEWING, MASTERED,
         )
-        from sm2 import SM2
 
         with self._lock:
             # First, clear all existing card states for this user
@@ -490,7 +494,6 @@ class Database:
                     correct_answer = attempt["correct_answer"]
                     response_time_ms = attempt["response_time_ms"]
                     is_correct = bool(attempt["is_correct"])
-                    is_slow = bool(attempt["is_slow"])
 
                     # Get current card state or create default
                     row = self.conn.execute(
@@ -507,21 +510,10 @@ class Database:
                     grade = grade_response(is_correct, response_time_ms)
 
                     # Update state based on grade
-                    updated_state = update_card_state(state, grade, response_time_ms)
-
-                    # Also apply SM-2 update for cross-session scheduling
-                    sm2_quality = SM2.quality_score(is_correct, is_slow)
-                    old_ease = state.get("ease_factor", 2.5)
-                    old_interval = state.get("interval_days", 0)
-                    old_reps = state.get("repetitions", 0)
-
-                    new_ease, new_interval, new_reps, due_ts = SM2.update(
-                        old_ease, old_interval, old_reps, sm2_quality
+                    reviewed_at = datetime.fromisoformat(attempt["created_at"])
+                    updated_state = update_card_state(
+                        state, grade, response_time_ms, now=reviewed_at
                     )
-                    updated_state["ease_factor"] = new_ease
-                    updated_state["interval_days"] = new_interval
-                    updated_state["repetitions"] = new_reps
-                    updated_state["due_timestamp"] = due_ts
 
                     # Save updated state (direct SQL to avoid lock recursion)
                     self.conn.execute(
@@ -531,8 +523,8 @@ class Database:
                             consecutive_correct, consecutive_fast, consecutive_failures,
                             rolling_avg_ms, last_response_ms, difficulty,
                             interval_days, due_timestamp, last_seen_at, total_time_ms,
-                            ease_factor, repetitions
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ease_factor, repetitions, fsrs_card_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(user_id, card_id) DO UPDATE SET
                             state                = excluded.state,
                             total_attempts       = excluded.total_attempts,
@@ -548,7 +540,8 @@ class Database:
                             last_seen_at         = excluded.last_seen_at,
                             total_time_ms        = total_time_ms + excluded.last_response_ms,
                             ease_factor          = excluded.ease_factor,
-                            repetitions          = excluded.repetitions
+                            repetitions          = excluded.repetitions,
+                            fsrs_card_json       = excluded.fsrs_card_json
                         """,
                         (
                             user_id, card_id,
@@ -567,6 +560,7 @@ class Database:
                             updated_state.get("total_time_ms", 0),
                             updated_state.get("ease_factor", 2.5),
                             updated_state.get("repetitions", 0),
+                            updated_state.get("fsrs_card_json"),
                         ),
                     )
 

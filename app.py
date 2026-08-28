@@ -65,16 +65,17 @@ class ListenWorker(QObject):
 
 
 # ════════════════════════════════════════════════════════════════════════
-#  Card scheduler — combines SM-2 across-session + within-session retry
+#  Card scheduler — combines FSRS across-session + within-session retry
 # ════════════════════════════════════════════════════════════════════════
 
 class CardScheduler:
     """Fluency-based card scheduler.
 
-    Uses priority scoring instead of SM-2 due dates:
-      - LEARNING cards get highest base priority
-      - REVIEWING cards prioritized by overdue ratio + difficulty + speed
-      - MASTERED cards only shown if nothing else to review
+    Uses FSRS due dates and retrievability as the primary priority:
+      - due FSRS reviews come first
+      - new cards come next
+      - future FSRS reviews come last
+      - fluency difficulty and speed break ties within those groups
       - Within-session retries for AGAIN/HARD responses
 
     Queue is pre-built from priority scores, padded to reach the
@@ -418,7 +419,7 @@ class NumberGridWidget(QWidget):
         elif self.op == "sub":
             self.nums = list(range(1, 11))       # 1-10
         else:
-            self.nums = list(range(2, 13))       # 2-12
+            self.nums = list(range(2, 16))       # 2-15
 
         nums = self.nums
         n = len(nums)
@@ -698,7 +699,7 @@ class SetupScreen(QWidget):
         lbl_num.setFont(QFont("Segoe UI", 22, QFont.Bold))  # Reduced from 28 to 22 (20% smaller)
         lbl_num.setProperty("accessibleName", "highlighted-label")  # Apply highlighting
         self.spin_num = QSpinBox()
-        self.spin_num.setRange(10, 1000)
+        self.spin_num.setRange(10, 100)
         self.spin_num.setValue(50)
         self.spin_num.setSingleStep(10)
         self.spin_num.setMinimumWidth(240)  # Reduced from 300 to 240 (20% smaller)
