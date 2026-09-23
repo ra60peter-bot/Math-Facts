@@ -60,7 +60,7 @@ export function parseSpokenNumber(transcript: string, mappings: Record<string, n
 
   if (/^\d+$/.test(spoken)) {
     const value = Number(spoken);
-    return VALID_ANSWERS.has(value) ? value : null;
+    return Number.isSafeInteger(value) ? value : null;
   }
   if (spoken in mappings) return mappings[spoken];
   if (spoken in phraseToNumber) return phraseToNumber[spoken];
@@ -84,5 +84,5 @@ export function parseSpokenNumber(transcript: string, mappings: Record<string, n
     }
   }
   result += current;
-  return VALID_ANSWERS.has(result) ? result : null;
+  return Number.isSafeInteger(result) ? result : null;
 }

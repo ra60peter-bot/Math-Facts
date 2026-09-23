@@ -1,10 +1,11 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { FormEvent, Fragment, useCallback, useEffect, useId, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { FactCard, answerFor, buildQueue, insertRetry, makeCards } from "../lib/cards";
-import { loadCloudProgress, loadVoiceMappings, saveVoiceMapping, syncCloudProgress } from "../lib/cloud-progress";
+import { loadCloudProgress, loadVoiceMappings, saveVoiceMapping, syncCloudProgress, queueProgressWrite, rememberUploadedSessions } from "../lib/cloud-progress";
 import { reviewCardState } from "../lib/fsrs-scheduler";
+import { HistorySort, historyResult, sortHistoryAttempts } from "../lib/history-sort";
 import { CardState, Grade, Operation, TIMEOUT_MS, defaultState, gradeResponse, masteryScore } from "../lib/learning";
 import { normalizeSpokenPhrase, parseSpokenNumber } from "../lib/number-parser";
 import { hasSupabaseConfig, supabaseBrowser } from "../lib/supabase-browser";
@@ -14,7 +15,7 @@ type Phase = "setup" | "practice" | "results";
 type Attempt = { id: string; fact: string; operation: Operation; correct: boolean; answerCorrect: boolean; responseMs: number; heard: string; at: string };
 type SavedSession = { id: string; operation: Operation; startedAt: string; endedAt: string; attempts: Attempt[] };
 type Persisted = { states: Record<string, CardState>; sessions: SavedSession[] };
-type PendingWrong = { card: FactCard; transcript: string };
+type PendingWrong = { card: FactCard; transcript: string; responseMs: number; attemptId: string; previousState: CardState };
 type AccountRole = "admin" | "user";
 type AccountProfile = { id: string; email: string; displayName: string | null; role: AccountRole; status: "active" | "blocked" };
 type StudentProfile = { id: string; ownerId: string; name: string; createdAt: string; ownerEmail?: string };
@@ -22,7 +23,7 @@ type AdminSessionSummary = { id: string; operation: Operation; startedAt: string
 type ManagedStudent = { id: string; name: string; createdAt: string; sessions: AdminSessionSummary[] };
 type ManagedUser = { id: string; email: string; displayName: string | null; role: AccountRole; status: "active" | "blocked"; createdAt: string; students: ManagedStudent[] };
 type LocalUser = { id: string; name: string; createdAt: string };
-type BrowserSpeechResult = { isFinal: boolean; 0: { transcript: string } };
+type BrowserSpeechResult = { isFinal: boolean; length: number; [index: number]: { transcript: string } };
 type BrowserSpeechResultList = { length: number; [index: number]: BrowserSpeechResult };
 type BrowserSpeechRecognitionEvent = { results: BrowserSpeechResultList };
 type BrowserSpeechRecognitionErrorEvent = { error: string };
@@ -32,12 +33,13 @@ type BrowserSpeechRecognition = {
   interimResults: boolean;
   maxAlternatives: number;
   onstart: (() => void) | null;
-  onsoundstart: (() => void) | null;
+  onspeechstart: (() => void) | null;
   onresult: ((event: BrowserSpeechRecognitionEvent) => void) | null;
   onerror: ((event: BrowserSpeechRecognitionErrorEvent) => void) | null;
   onend: (() => void) | null;
   start: () => void;
   stop: () => void;
+  abort: () => void;
 };
 type BrowserSpeechRecognitionConstructor = new () => BrowserSpeechRecognition;
 
@@ -261,6 +263,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
   const progressOwnerId = cloudUser ? selectedStudentId : (localUserId ?? DEFAULT_LOCAL_USER.id);
   const progressAccountId = cloudUser ? (activeStudent?.ownerId ?? cloudUser.id) : "";
   const [view, setView] = useState<View>("practice");
+  const [historyLocalUserId, setHistoryLocalUserId] = useState(localUserId ?? "local-default");
   const [phase, setPhase] = useState<Phase>("setup");
   const [operation, setOperation] = useState<Operation>("add");
   const [questionCount, setQuestionCount] = useState(50);
@@ -278,6 +281,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
   const [result, setResult] = useState<{ text: string; tone: "good" | "slow" | "wrong"; correctAnswer?: number } | null>(null);
   const [pendingWrong, setPendingWrong] = useState<PendingWrong | null>(null);
   const [speechSupported, setSpeechSupported] = useState(true);
+  const [questionReady, setQuestionReady] = useState(false);
 
   const loadStudents = useCallback(async () => {
     if (!cloudUser) return;
@@ -326,14 +330,20 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
     timeoutRef.current = null;
     if (recognitionRef.current) {
-      recognitionRef.current.onend = null;
-      recognitionRef.current.stop();
+      const recognition = recognitionRef.current;
       recognitionRef.current = null;
+      recognition.onend = null;
+      recognition.onresult = null;
+      recognition.onerror = null;
+      recognition.onstart = null;
+      recognition.onspeechstart = null;
+      recognition.abort();
     }
   }, []);
 
   useEffect(() => {
     if (!progressOwnerId) return;
+    let cancelled = false;
     const saved = readProgress(progressOwnerId);
     const savedMappings = readVoiceMappings(progressOwnerId);
     statesRef.current = saved.states;
@@ -343,13 +353,14 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     const client = supabaseBrowser();
     if (client && cloudUser) {
       loadCloudProgress(client, progressOwnerId).then((cloud) => {
-        if (!cloud || (!Object.keys(cloud.states).length && !cloud.sessions.length)) return;
+        if (cancelled || !cloud || (!Object.keys(cloud.states).length && !cloud.sessions.length)) return;
         statesRef.current = cloud.states;
         setStates(cloud.states);
         setSessions(cloud.sessions);
         localStorage.setItem(progressStorageKey(progressOwnerId), JSON.stringify(cloud));
       }).catch(() => undefined);
       loadVoiceMappings(client, progressOwnerId).then((cloudMappings) => {
+        if (cancelled) return;
         const merged = { ...cloudMappings, ...savedMappings };
         voiceMappingsRef.current = merged;
         localStorage.setItem(voiceMappingsStorageKey(progressOwnerId), JSON.stringify(merged));
@@ -357,8 +368,24 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     }
     const Recognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
     setSpeechSupported(Boolean(Recognition));
-    navigator.serviceWorker?.register("/sw.js").catch(() => undefined);
-    return () => stopListening();
+    if ("serviceWorker" in navigator) {
+      if (process.env.NODE_ENV === "production") {
+        navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+      } else {
+        // An old offline shell can refer to styles removed by a later dev build.
+        navigator.serviceWorker.getRegistrations().then(async (registrations) => {
+          for (const registration of registrations) {
+            const worker = registration.active ?? registration.waiting ?? registration.installing;
+            if (worker && new URL(worker.scriptURL).pathname === "/sw.js") {
+              await registration.unregister();
+            }
+          }
+          const keys = await caches.keys();
+          await Promise.all(keys.filter((key) => key.startsWith("math-facts-")).map((key) => caches.delete(key)));
+        }).catch(() => undefined);
+      }
+    }
+    return () => { cancelled = true; stopListening(); };
   }, [cloudUser, progressOwnerId, stopListening]);
 
   const saveProgress = useCallback((nextStates: Record<string, CardState>, nextSessions: SavedSession[]) => {
@@ -407,10 +434,11 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     soundResponseMsRef.current = null;
     questionStartRef.current = performance.now();
     setCurrent(next);
+    setQuestionReady(false);
     setHeard("");
     setResult(null);
     setPendingWrong(null);
-    window.setTimeout(() => startListeningRef.current(next), 100);
+    nextRef.current = window.setTimeout(() => startListeningRef.current(next), 100);
   }, [operation, saveProgress, sessions, stopListening]);
 
   const scheduleRetry = useCallback((card: FactCard, grade: Grade) => {
@@ -437,10 +465,10 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     setListenState("");
     const elapsed = `${(responseMs / 1000).toFixed(1)} seconds`;
     setResult(passed
-      ? { text: `Good - ${elapsed}`, tone: "good" }
+      ? { text: `Correct! ${elapsed}`, tone: "good" }
       : answerCorrect
-        ? { text: `Good effort - ${elapsed}`, tone: "slow" }
-        : { text: `Wrong answer - ${elapsed}`, tone: "wrong", correctAnswer: answerFor(card) });
+        ? { text: `Slow! ${elapsed}`, tone: "slow" }
+        : { text: `Wrong! ${elapsed}`, tone: "wrong", correctAnswer: answerFor(card) });
     const attemptId = crypto.randomUUID();
     attemptsRef.current = [...attemptsRef.current, { id: attemptId, fact: `${card.a} ${operationSymbol(card.operation)} ${card.b}`, operation: card.operation, correct: answerCorrect, answerCorrect, responseMs, heard: transcript, at: new Date().toISOString() }];
     setProgress(attemptsRef.current.length);
@@ -449,52 +477,94 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
       scheduleRetry(card, grade);
       nextRef.current = window.setTimeout(advance, passed ? 950 : 1450);
     } else {
-      setPendingWrong({ card, transcript });
+      setPendingWrong({ card, transcript, responseMs, attemptId, previousState });
     }
   }, [advance, scheduleRetry, stopListening]);
 
   const startListening = useCallback((card: FactCard) => {
     const Recognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
     if (!Recognition) { setSpeechSupported(false); setListenState("Speech recognition is unavailable in this browser."); return; }
+    stopListening();
+    answerHandledRef.current = false;
+    soundResponseMsRef.current = null;
+    setQuestionReady(false);
+    setHeard("");
+    setResult(null);
+    setListenState("Starting microphone…");
     const recognition = new Recognition();
     recognition.lang = "en-US";
     recognition.continuous = false;
     recognition.interimResults = true;
-    recognition.maxAlternatives = 3;
-    recognition.onstart = () => setListenState("Listening");
-    recognition.onsoundstart = () => {
-      if (soundResponseMsRef.current === null) {
+    recognition.maxAlternatives = 5;
+    let latestTranscript = "";
+    let latestResponseMs = TIMEOUT_MS;
+    let ready = false;
+    const isActive = () => recognitionRef.current === recognition && !answerHandledRef.current;
+    const fail = (message: string) => {
+      if (!isActive()) return;
+      stopListening();
+      setListenState(message);
+    };
+    const finish = () => {
+      if (!isActive()) return;
+      const parsed = parseSpokenNumber(latestTranscript, voiceMappingsRef.current);
+      handleResponse(card, latestTranscript, parsed, latestTranscript ? latestResponseMs : TIMEOUT_MS);
+    };
+    recognition.onstart = () => {
+      if (!isActive() || ready) return;
+      ready = true;
+      if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
+      questionStartRef.current = performance.now();
+      setQuestionReady(true);
+      setListenState("Listening — say your answer");
+      timeoutRef.current = window.setTimeout(finish, TIMEOUT_MS);
+    };
+    recognition.onspeechstart = () => {
+      if (isActive() && ready && soundResponseMsRef.current === null) {
         soundResponseMsRef.current = Math.min(Math.round(performance.now() - questionStartRef.current), TIMEOUT_MS);
       }
     };
     recognition.onresult = (event: BrowserSpeechRecognitionEvent) => {
+      if (!isActive() || !ready || !event.results.length) return;
       const transcripts: string[] = [];
       for (let index = 0; index < event.results.length; index += 1) transcripts.push(event.results[index][0]?.transcript ?? "");
-      const transcript = transcripts.join(" ").trim();
-      setHeard(transcript);
-      if (event.results[event.results.length - 1]?.isFinal) {
-        const responseMs = soundResponseMsRef.current ?? Math.min(Math.round(performance.now() - questionStartRef.current), TIMEOUT_MS);
-        handleResponse(card, transcript, parseSpokenNumber(transcript, voiceMappingsRef.current), responseMs);
+      let transcript = transcripts.join(" ").trim();
+      // Respect the browser's first numeric interpretation, even if it is wrong.
+      // Consult alternatives only when the first transcript contains no number.
+      if (event.results.length === 1 && parseSpokenNumber(transcript, voiceMappingsRef.current) === null) {
+        const result = event.results[0];
+        for (let index = 1; index < result.length; index += 1) {
+          const alternative = result[index]?.transcript ?? "";
+          if (parseSpokenNumber(alternative, voiceMappingsRef.current) !== null) { transcript = alternative; break; }
+        }
       }
+      latestTranscript = transcript;
+      latestResponseMs = soundResponseMsRef.current ?? Math.min(Math.round(performance.now() - questionStartRef.current), TIMEOUT_MS);
+      setHeard(transcript);
+      if (event.results[event.results.length - 1]?.isFinal) finish();
     };
     recognition.onerror = (event: BrowserSpeechRecognitionErrorEvent) => {
       if (event.error === "no-speech") return;
-      setListenState(event.error === "not-allowed" ? "Microphone permission is required." : "Speech recognition could not start. Try the microphone button.");
+      const messages: Record<string, string> = {
+        "not-allowed": "Allow microphone access, then tap Mic to retry.",
+        "service-not-allowed": "Speech recognition is blocked by this browser. Check its permissions.",
+        "audio-capture": "No microphone found. Connect one, then tap Mic to retry.",
+        "network": "Speech service connection failed. Check your connection, then tap Mic.",
+      };
+      fail(messages[event.error] ?? "Speech recognition stopped. Tap Mic to retry.");
     };
     recognition.onend = () => {
-      if (!answerHandledRef.current && timeoutRef.current === null) {
-        handleResponse(card, "", null, TIMEOUT_MS);
-      }
+      if (!isActive()) return;
+      if (!ready) fail("Microphone did not start. Tap Mic to retry.");
+      else if (latestTranscript) finish();
+      else setListenState("No speech detected");
     };
     recognitionRef.current = recognition;
-    try {
-      recognition.start();
-      timeoutRef.current = window.setTimeout(() => handleResponse(card, "", null, TIMEOUT_MS), TIMEOUT_MS);
-    } catch {
-      setListenState("Speech recognition is already starting. Try again in a moment.");
-    }
-  }, [handleResponse]);
-
+    // Startup failures do not count as a student's answer or consume answer time.
+    timeoutRef.current = window.setTimeout(() => fail("Microphone did not start. Tap Mic to retry."), TIMEOUT_MS);
+    try { recognition.start(); }
+    catch { fail("Microphone could not start. Tap Mic to retry."); }
+  }, [handleResponse, stopListening]);
   useEffect(() => { startListeningRef.current = startListening; }, [startListening]);
 
   const startPractice = () => {
@@ -533,24 +603,50 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     if (!pendingWrong) return;
     const phrase = normalizeSpokenPhrase(pendingWrong.transcript);
     if (!phrase) return;
-    const acceptedAnswer = answerFor(pendingWrong.card);
-
-    const nextMappings = { ...voiceMappingsRef.current, [phrase]: acceptedAnswer };
-    voiceMappingsRef.current = nextMappings;
-    localStorage.setItem(voiceMappingsStorageKey(progressOwnerId), JSON.stringify(nextMappings));
-    const client = supabaseBrowser();
-    if (client && cloudUser && navigator.onLine) {
-      void saveVoiceMapping(client, progressOwnerId, progressAccountId, phrase, acceptedAnswer).catch(() => undefined);
-    }
-
-    setResult({ text: "Pronunciation saved for future answers", tone: "good" });
-    scheduleRetry(pendingWrong.card, "again");
+    // Correct this attempt without teaching the recognizer that a wrong number
+    // (for example 51) should always mean a different number (50).
+    const grade = gradeResponse(true, pendingWrong.responseMs);
+    const correctedState = reviewCardState(pendingWrong.previousState, grade, pendingWrong.responseMs);
+    const nextStates = { ...statesRef.current, [pendingWrong.card.id]: correctedState };
+    statesRef.current = nextStates;
+    setStates(nextStates);
+    attemptsRef.current = attemptsRef.current.map((attempt) => attempt.id === pendingWrong.attemptId
+      ? { ...attempt, answerCorrect: true, correct: true } : attempt);
+    const fast = pendingWrong.responseMs <= 1500;
+    setResult({ text: `${fast ? "Correct!" : "Slow!"} ${(pendingWrong.responseMs / 1000).toFixed(1)} seconds`, tone: fast ? "good" : "slow" });
+    scheduleRetry(pendingWrong.card, grade);
     setPendingWrong(null);
     nextRef.current = window.setTimeout(advance, 800);
   };
 
+  const exitPractice = () => {
+    // Ignore late speech results and cancel both feedback and microphone timers.
+    answerHandledRef.current = true;
+    if (nextRef.current !== null) window.clearTimeout(nextRef.current);
+    nextRef.current = null;
+    stopListening();
+    if (sessionStartedAtRef.current) {
+      const completed: SavedSession = {
+        id: crypto.randomUUID(),
+        operation,
+        startedAt: sessionStartedAtRef.current,
+        endedAt: new Date().toISOString(),
+        attempts: [...attemptsRef.current],
+      };
+      saveProgress(statesRef.current, [completed, ...sessions]);
+      sessionStartedAtRef.current = "";
+    }
+    queueRef.current = [];
+    setCurrent(null);
+    setPendingWrong(null);
+    setListenState("");
+    setHeard("");
+    setResult(null);
+    setPhase("setup");
+  };
+
   const allCards = makeCards(operation);
-  const selectedCount = selectedFacts[operation].size;
+  const selectedCount = allCards.filter((card) => selectedFacts[operation].has(card.id)).length;
   const stateList = allCards.map((card) => states[card.id] ?? defaultState(card.id));
   const summary = masteryScore(stateList);
   const currentSession = phase === "results" ? sessions[0] : null;
@@ -577,18 +673,73 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
   }
 
   if (view === "history") {
+    const historyStudent = localUsers.find((student) => student.id === historyLocalUserId);
+    const historySessions = cloudUser ? sessions : readProgress(historyLocalUserId).sessions;
     return <AppFrame view={view} onNavigate={setView} onExit={() => setView("practice")} isAdmin={isAdmin} accountName={accountName}>
-      <div className="topbar"><div><h1>History</h1><p className="muted">{cloudUser ? `Showing completed sessions for ${activeStudent?.name ?? "the selected student"}.` : `Showing completed sessions for ${localUserName ?? "this learner"} on this device.`}</p></div></div>
-      {sessions.length === 0 ? <p className="empty">No sessions yet.</p> : <table className="history-table"><thead><tr><th>When</th><th>Operation</th><th>Questions</th><th>Accuracy</th><th>Average time</th></tr></thead><tbody>{sessions.map((session) => {
-        const correct = session.attempts.filter((attempt) => attempt.answerCorrect).length;
-        const avg = session.attempts.length ? Math.round(session.attempts.reduce((sum, attempt) => sum + attempt.responseMs, 0) / session.attempts.length) : 0;
-        return <tr key={session.id}><td>{new Date(session.endedAt).toLocaleDateString()}</td><td>{operationLabel(session.operation)}</td><td>{session.attempts.length}</td><td>{session.attempts.length ? Math.round((correct / session.attempts.length) * 100) : 0}%</td><td>{avg ? `${(avg / 1000).toFixed(1)}s` : "-"}</td></tr>;
-      })}</tbody></table>}
+      <div className="topbar"><div><h1>History</h1><p className="muted">{cloudUser ? `Showing sessions, including early exits, for ${activeStudent?.name ?? "the selected student"}.` : `Showing sessions, including early exits, for ${historyStudent?.name ?? "this learner"} on this device.`}</p></div></div>
+      <div className="form-row">
+        <label>Student
+          {cloudUser
+            ? <select value={selectedStudentId} onChange={(event) => selectStudent(event.target.value)} disabled={studentsLoading || cloudStudents.length === 0}>
+                {cloudStudents.length === 0 && <option value="">No students yet</option>}
+                {cloudStudents.map((student) => <option key={student.id} value={student.id}>{student.name}{isAdmin && student.ownerEmail ? ` — ${student.ownerEmail}` : ""}</option>)}
+              </select>
+            : <select value={historyLocalUserId} onChange={(event) => setHistoryLocalUserId(event.target.value)}>
+                {localUsers.map((student) => <option key={student.id} value={student.id}>{student.name}</option>)}
+              </select>}
+        </label>
+      </div>
+      <SessionHistory key={cloudUser ? selectedStudentId : historyLocalUserId} sessions={historySessions} detailedDates onDelete={async (sessionId) => {
+        const ownerId = cloudUser ? selectedStudentId : historyLocalUserId;
+        if (cloudUser) {
+          if (!navigator.onLine) throw new Error("Connect to the internet to delete a saved session.");
+          await queueProgressWrite(ownerId, async () => {
+            await accountRequest(`/api/sessions/${sessionId}`, { method: "DELETE" });
+            rememberUploadedSessions(ownerId, [sessionId]);
+          });
+        }
+        const saved = readProgress(ownerId);
+        saved.sessions = saved.sessions.filter((session) => session.id !== sessionId);
+        localStorage.setItem(progressStorageKey(ownerId), JSON.stringify(saved));
+        setSessions((current) => current.filter((session) => session.id !== sessionId));
+      }} />
     </AppFrame>;
   }
 
   if (phase === "practice" && current) {
-    return <main className="practice"><div className="progress">{progress} of {questionCount} completed</div><div className="fact">{current.a} {operationSymbol(current.operation)} {current.b}</div><div className="listen-state">{listenState}</div><div className="heard">{heard ? `Heard: ${heard}` : ""}</div><div className={`result ${result?.tone ?? ""}`}>{result?.text ?? ""}</div>{result?.tone === "wrong" && <><div className="answer-reveal">Correct answer: {result.correctAnswer}</div><div className="answer-actions">{pendingWrong?.transcript && <button className="button secondary" onClick={allowPendingAnswer}>Allow this answer</button>}<button className="button primary" onClick={continueAfterWrong}>Next question</button></div></>}<button className={`mic ${listenState === "Listening" ? "listening" : ""}`} aria-label="Start listening" title="Start listening" onClick={restartRecognition} disabled={Boolean(result)}>Mic</button></main>;
+    return (
+      <main className="practice">
+        <header className="practice-toolbar">
+          <button className="button secondary exit-practice" onClick={exitPractice}>Exit practice</button>
+          <div className="progress">{progress} of {questionCount} completed</div>
+        </header>
+        <section className="practice-focus" aria-label="Current question">
+          <div className={`fact ${questionReady ? "" : "fact-preparing"}`}>{questionReady ? <>{current.a} {operationSymbol(current.operation)} {current.b}</> : "Get ready…"}</div>
+          <div className="practice-feedback" aria-live="polite" aria-atomic="true">
+            <div className={`result ${result?.tone ?? ""}`}>{result?.text ?? (questionReady ? "Say your answer aloud" : "Waiting for the microphone")}</div>
+            <div className="answer-reveal">{result?.tone === "wrong" ? `Correct answer: ${result.correctAnswer}` : ""}</div>
+          </div>
+        </section>
+        <footer className="practice-controls">
+          <div className="speech-controls">
+            <button className={`mic ${listenState.startsWith("Listening") ? "listening" : ""}`} aria-label="Start listening" title="Start listening" onClick={restartRecognition} disabled={Boolean(result)}>Mic</button>
+            <div className="speech-status">
+              <div className="listen-state">{listenState || (result ? "Answer recorded" : "Getting ready…")}</div>
+              <div className="heard">{heard ? `Heard: ${heard}` : "Speak clearly into your microphone"}</div>
+            </div>
+          </div>
+          <div className="answer-actions">
+            {result?.tone === "wrong" && <>
+              {pendingWrong?.transcript && <>
+                <p className="accept-answer-prompt">Accept “{pendingWrong.transcript}” as the correct answer?</p>
+                <button className="button secondary" onClick={allowPendingAnswer}>Yes, accept answer</button>
+              </>}
+              <button className="button primary" onClick={continueAfterWrong}>{pendingWrong?.transcript ? "No, next question" : "Next question"}</button>
+            </>}
+          </div>
+        </footer>
+      </main>
+    );
   }
 
   if (cloudUser && studentsLoading) {
@@ -616,15 +767,21 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
       </div>
     ) : (
       <div className="setup">
-        <h1>Practice</h1>
-        <p className="muted">Speak each answer aloud. The session scores accuracy, speed, and consistency.</p>
+        <header className="practice-heading">
+          <p className="eyebrow">A little practice, every day</p>
+          <h1>Let’s practice.</h1>
+          <p className="muted">Choose your facts, then speak each answer aloud. Build confidence one question at a time.</p>
+        </header>
         {!speechSupported && <p className="notice">This app requires speech recognition. Use the latest Chrome or Edge on a laptop or desktop, then allow microphone access.</p>}
+        <section className="session-settings" aria-labelledby="session-settings-title">
+        <h2 id="session-settings-title">Your practice session</h2>
         <div className="form-row">
           {cloudUser && <label>Student<select value={selectedStudentId} onChange={(event) => selectStudent(event.target.value)}>{cloudStudents.map((student) => <option key={student.id} value={student.id}>{student.name}{isAdmin && student.ownerEmail ? ` — ${student.ownerEmail}` : ""}</option>)}</select></label>}
           <div className="operation-field"><span>Operation</span><div className="operation-toggle"><button aria-pressed={operation === "add"} onClick={() => setOperation("add")}>Addition</button><button aria-pressed={operation === "sub"} onClick={() => setOperation("sub")}>Subtraction</button><button aria-pressed={operation === "mul"} onClick={() => setOperation("mul")}>Multiplication</button></div></div>
           <label>Questions<select value={questionCount} onChange={(event) => setQuestionCount(Number(event.target.value))}>{QUESTION_COUNT_OPTIONS.map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
           <button className="button primary" onClick={startPractice} disabled={!speechSupported || selectedCount === 0}>Start practice</button>
         </div>
+        </section>
         <FactGrid operation={operation} selected={selectedFacts[operation]} onChange={(next) => setSelectedFacts((current) => ({ ...current, [operation]: next }))} />
         <div className="stats">
           <Stat label="Facts selected" value={`${selectedCount}/${allCards.length}`} />
@@ -666,9 +823,9 @@ function FactGrid({ operation, selected, onChange }: { operation: Operation; sel
     ? "Single-digit addition: 1 through 9"
     : operation === "sub"
       ? "Subtraction: positive answers using 1 through 10"
-      : "Multiplication: 2 through 15";
+      : "Multiplication: 2 through 12";
 
-  return <section className="fact-selector" aria-labelledby="fact-selector-title"><div className="fact-selector-heading"><div><h2 id="fact-selector-title">Choose facts</h2><p className="muted">{description}</p></div><div className="selection-actions"><button className="button secondary" onClick={() => onChange(new Set(allKeys))}>Select all</button><button className="button secondary" onClick={() => onChange(new Set())}>Clear all</button></div></div><div className="fact-grid-scroll"><div className="fact-grid" style={{ gridTemplateColumns: `74px repeat(${columns.length}, 42px)` }}><AxisToggle label="All" keys={allKeys} selected={selected} onToggle={toggleKeys} />{columns.map((column) => <AxisToggle key={`column-${column}`} label={String(column)} keys={rows.map((row) => keyFor(row, column)).filter((key) => validKeys.has(key))} selected={selected} onToggle={toggleKeys} />)}{rows.map((row) => <div className="fact-grid-row" key={`row-${row}`} style={{ gridColumn: `1 / span ${columns.length + 1}`, gridTemplateColumns: `74px repeat(${columns.length}, 42px)` }}><AxisToggle label={String(row)} keys={columns.map((column) => keyFor(row, column)).filter((key) => validKeys.has(key))} selected={selected} onToggle={toggleKeys} />{columns.map((column) => { const key = keyFor(row, column); return validKeys.has(key) ? <label className="fact-cell" key={key} title={`${row} ${operationWord(operation)} ${column}`}><input type="checkbox" checked={selected.has(key)} onChange={() => toggleKeys([key])} /><span className="sr-only">{row} {operationWord(operation)} {column}</span></label> : <span className="fact-cell unavailable" aria-hidden="true" key={key} />; })}</div>)}</div></div></section>;
+  return <section className="fact-selector" aria-labelledby="fact-selector-title"><div className="fact-selector-heading"><div><h2 id="fact-selector-title">Choose facts</h2><p className="muted">{description}</p></div><div className="selection-actions"><button className="button secondary" onClick={() => onChange(new Set(allKeys))}>Select all</button><button className="button secondary" onClick={() => onChange(new Set())}>Clear all</button></div></div><div className="fact-grid-scroll"><div className="fact-grid" style={{ gridTemplateColumns: `64px repeat(${columns.length}, minmax(38px, 1fr))` }}><AxisToggle label="All" keys={allKeys} selected={selected} onToggle={toggleKeys} />{columns.map((column) => <AxisToggle key={`column-${column}`} label={String(column)} keys={rows.map((row) => keyFor(row, column)).filter((key) => validKeys.has(key))} selected={selected} onToggle={toggleKeys} />)}{rows.map((row) => <div className="fact-grid-row" key={`row-${row}`} style={{ gridColumn: `1 / span ${columns.length + 1}`, gridTemplateColumns: `64px repeat(${columns.length}, minmax(38px, 1fr))` }}><AxisToggle label={String(row)} keys={columns.map((column) => keyFor(row, column)).filter((key) => validKeys.has(key))} selected={selected} onToggle={toggleKeys} />{columns.map((column) => { const key = keyFor(row, column); return validKeys.has(key) ? <label className="fact-cell" key={key} title={`${row} ${operationWord(operation)} ${column}`}><input type="checkbox" checked={selected.has(key)} onChange={() => toggleKeys([key])} /><span className="sr-only">{row} {operationWord(operation)} {column}</span></label> : <span className="fact-cell unavailable" aria-hidden="true" key={key} />; })}</div>)}</div></div><p className="grid-help">Select individual facts, or use a row or column to select a group.</p></section>;
 }
 
 function AxisToggle({ label, keys, selected, onToggle }: { label: string; keys: string[]; selected: Set<string>; onToggle: (keys: string[]) => void }) {
@@ -745,15 +902,65 @@ function LocalUserManagement({ users, activeUserId, onAddUser, onDeleteUser, onS
   return <div className="users-view"><div className="topbar"><div><h1>Admin</h1><p className="muted">Add learners, switch the active learner, review performance, and remove local accounts.</p></div></div><section className="user-toolbar"><h2>Add user</h2><form className="form-row" onSubmit={addUser}><label>Name<input type="text" required maxLength={60} value={name} onChange={(event) => setName(event.target.value)} /></label><button className="button primary">Add user</button></form>{message && <p className="notice">{message}</p>}</section><section><h2>Users</h2><div className="table-scroll"><table className="history-table"><thead><tr><th>User</th><th>Added</th><th>Sessions</th><th>Last practice</th><th>Actions</th></tr></thead><tbody>{userRecords.map(({ user, progress }) => <tr key={user.id}><td><strong>{user.name}</strong>{user.id === activeUserId && <span className="role-label">Active</span>}</td><td>{user.createdAt ? new Date(user.createdAt).toLocaleDateString() : "Local profile"}</td><td>{progress.sessions.length}</td><td>{progress.sessions[0] ? new Date(progress.sessions[0].endedAt).toLocaleDateString() : "Never"}</td><td><div className="table-actions">{user.id !== activeUserId && <button className="button primary" onClick={() => onSelectUser(user.id)}>Use user</button>}<button className="button secondary" onClick={() => setSelectedUserId(user.id)}>View history</button>{pendingDeleteUserId === user.id ? <><button className="button secondary" onClick={() => setPendingDeleteUserId("")}>Cancel</button><button className="button danger" onClick={() => deleteUser(user)}>Confirm delete</button></> : <button className="button danger" disabled={users.length <= 1} onClick={() => setPendingDeleteUserId(user.id)}>Delete</button>}</div></td></tr>)}</tbody></table></div></section>{selectedRecord && <section className="user-history"><h2>{selectedRecord.user.name} history</h2><SessionHistory sessions={selectedRecord.progress.sessions} detailedDates /></section>}</div>;
 }
 
-function SessionHistory({ sessions, detailedDates = false }: { sessions: SavedSession[]; detailedDates?: boolean }) {
-  if (sessions.length === 0) return <p className="empty">No completed sessions.</p>;
-  return <div className="table-scroll"><table className="history-table"><thead><tr><th>When</th><th>Operation</th><th>Questions</th><th>Accuracy</th><th>Average time</th></tr></thead><tbody>{sessions.map((session) => {
-    const correct = session.attempts.filter((attempt) => attempt.answerCorrect).length;
-    const averageMs = session.attempts.length ? Math.round(session.attempts.reduce((sum, attempt) => sum + attempt.responseMs, 0) / session.attempts.length) : 0;
-    return <tr key={session.id}><td>{detailedDates ? new Date(session.endedAt).toLocaleString() : new Date(session.endedAt).toLocaleDateString()}</td><td>{operationLabel(session.operation)}</td><td>{session.attempts.length}</td><td>{session.attempts.length ? `${Math.round((correct / session.attempts.length) * 100)}%` : "-"}</td><td>{averageMs ? `${(averageMs / 1000).toFixed(1)}s` : "-"}</td></tr>;
-  })}</tbody></table></div>;
+function SessionHistory({ sessions, detailedDates = false, onDelete }: { sessions: SavedSession[]; detailedDates?: boolean; onDelete?: (id: string) => Promise<void> }) {
+  const [sessionSorts, setSessionSorts] = useState<Record<string, HistorySort>>({});
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState("");
+  async function deleteSession(id: string) {
+    if (!onDelete || deletingId) return;
+    setDeletingId(id);
+    setDeleteError("");
+    try { await onDelete(id); setConfirmId(null); }
+    catch (error) { setDeleteError(error instanceof Error ? error.message : "Could not delete session."); }
+    finally { setDeletingId(null); }
+  }
+  const historyId = useId();
+  if (sessions.length === 0) return <p className="empty">No sessions yet.</p>;
+  return <>
+    <p className="muted">Select a session to see each question and response time.</p>
+    {deleteError && <p className="notice" role="alert">{deleteError}</p>}
+    <div className="table-scroll"><table className="history-table"><thead><tr><th>When</th><th>Operation</th><th>Questions</th><th>Accuracy</th><th>Average time</th><th>Details</th></tr></thead><tbody>{sessions.map((session) => {
+      const correct = session.attempts.filter((attempt) => attempt.answerCorrect).length;
+      const averageMs = session.attempts.length ? Math.round(session.attempts.reduce((sum, attempt) => sum + attempt.responseMs, 0) / session.attempts.length) : 0;
+      const expanded = expandedId === session.id;
+      const detailsId = `${historyId}-${session.id}`;
+      const sort = sessionSorts[session.id] ?? "question";
+      const setSort = (value: HistorySort) => setSessionSorts((current) => ({ ...current, [session.id]: value }));
+      const toggle = () => setExpandedId(expanded ? null : session.id);
+      const date = detailedDates ? new Date(session.endedAt).toLocaleString() : new Date(session.endedAt).toLocaleDateString();
+      return <Fragment key={session.id}>
+        <tr className={`session-row ${expanded ? "expanded" : ""}`} onClick={toggle}>
+          <td>{date}</td><td>{operationLabel(session.operation)}</td><td>{session.attempts.length}</td>
+          <td>{session.attempts.length ? `${Math.round((correct / session.attempts.length) * 100)}%` : "-"}</td>
+          <td>{session.attempts.length ? `${(averageMs / 1000).toFixed(1)}s` : "-"}</td>
+          <td><div className="table-actions"><button className="button secondary" aria-expanded={expanded} aria-controls={detailsId} aria-label={`${expanded ? "Hide" : "View"} questions for ${operationLabel(session.operation)} on ${date}`} onClick={(event) => { event.stopPropagation(); toggle(); }}>{expanded ? "Hide questions" : "View questions"}</button>
+            {onDelete && <button className="button danger" disabled={Boolean(deletingId)} aria-label={`Delete session from ${date}`} onClick={(event) => { event.stopPropagation(); setConfirmId(session.id); setDeleteError(""); }}>Delete</button>}
+          </div></td>
+        </tr>
+        {confirmId === session.id && <tr><td colSpan={6}>
+          <p>Delete this session and all its question results? This cannot be undone. Student mastery and review scheduling will stay unchanged.</p>
+          <div className="table-actions">
+            <button className="button secondary" disabled={Boolean(deletingId)} onClick={() => setConfirmId(null)}>Cancel</button>
+            <button className="button danger" disabled={Boolean(deletingId)} onClick={() => void deleteSession(session.id)}>{deletingId === session.id ? "Deleting…" : "Confirm delete"}</button>
+          </div>
+        </td></tr>}
+        {expanded && <tr><td colSpan={6} className="session-details"><section id={detailsId} aria-label={`Questions from ${date}`}>
+          <h2>Question results</h2>
+          {session.attempts.length > 0 && <p className="muted" aria-live="polite">{sort === "result" ? "Wrong answers first, then slow correct answers, then correct answers at or under 1.5 seconds. Each group is ordered slowest to fastest." : "In question order. Select Result to show wrong answers first, then slow answers, then correct answers."}</p>}
+          {session.attempts.length === 0 ? <p className="muted">No question results were recorded.</p> : <table className="history-table attempt-table">
+            <thead><tr><th scope="col" aria-sort={sort === "question" ? "ascending" : "none"}><button className="history-sort" onClick={() => setSort("question")} aria-label="Sort by question order"># {sort === "question" ? "↑" : "↕"}</button></th><th scope="col">Question</th><th scope="col">Response time</th><th scope="col" aria-sort={sort === "result" ? "other" : "none"}><button className="history-sort" onClick={() => setSort("result")}>Result {sort === "result" ? "↓" : "↕"}</button></th></tr></thead>
+            <tbody>{sortHistoryAttempts(session.attempts, sort).map(({ attempt, questionNumber }) => <tr key={attempt.id}>
+              <td>{questionNumber}</td><td>{attempt.fact}</td><td>{(attempt.responseMs / 1000).toFixed(2)}s</td>
+              <td><span className={`attempt-result ${historyResult(attempt)}`}>{historyResult(attempt) === "slow" ? "Slow (correct)" : attempt.answerCorrect ? "Correct" : "Wrong"}</span></td>
+            </tr>)}</tbody>
+          </table>}
+        </section></td></tr>}
+      </Fragment>;
+    })}</tbody></table></div>
+  </>;
 }
-
 async function accountRequest(path: string, init: RequestInit = {}) {
   const client = supabaseBrowser();
   if (!client) throw new Error("Supabase is not configured.");

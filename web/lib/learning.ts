@@ -31,7 +31,7 @@ export type CardState = {
 
 export const FAST_MS = 950;
 export const TARGET_MS = 1500;
-export const TIMEOUT_MS = 6000;
+export const TIMEOUT_MS = 4000;
 
 export function defaultState(cardId: string): CardState {
   return { cardId, state: "learning", totalAttempts: 0, totalCorrect: 0, consecutiveCorrect: 0, consecutiveFast: 0, consecutiveFailures: 0, rollingAvgMs: 0, lastResponseMs: 0, difficulty: 0.3, intervalDays: 0, dueAt: null, lastSeenAt: null, fsrs: null };

@@ -13,7 +13,7 @@ export function makeCards(operation: Operation): FactCard[] {
   }
 
   const minimum = operation === "add" ? 1 : 2;
-  const maximum = operation === "add" ? 9 : 15;
+  const maximum = operation === "add" ? 9 : 12;
   for (let a = minimum; a <= maximum; a += 1) {
     for (let b = minimum; b <= maximum; b += 1) {
       cards.push({ id: `${operation}-${a}-${b}`, a, b, operation });
