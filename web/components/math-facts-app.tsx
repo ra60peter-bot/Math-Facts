@@ -5,6 +5,7 @@ import type { User } from "@supabase/supabase-js";
 import { FactCard, answerFor, buildQueue, insertRetry, makeCards } from "../lib/cards";
 import { loadCloudProgress, loadVoiceMappings, saveVoiceMapping, syncCloudProgress, queueProgressWrite, rememberUploadedSessions } from "../lib/cloud-progress";
 import { reviewCardState } from "../lib/fsrs-scheduler";
+import { LocalSpeechStatus, LocalSpeechSupport, prepareLocalSpeech } from "../lib/local-speech";
 import { HistorySort, historyResult, sortHistoryAttempts } from "../lib/history-sort";
 import { CardState, Grade, Operation, TIMEOUT_MS, defaultState, gradeResponse, masteryScore } from "../lib/learning";
 import { normalizeSpokenPhrase, parseSpokenNumber } from "../lib/number-parser";
@@ -28,6 +29,7 @@ type BrowserSpeechResultList = { length: number; [index: number]: BrowserSpeechR
 type BrowserSpeechRecognitionEvent = { results: BrowserSpeechResultList };
 type BrowserSpeechRecognitionErrorEvent = { error: string };
 type BrowserSpeechRecognition = {
+  processLocally?: boolean;
   lang: string;
   continuous: boolean;
   interimResults: boolean;
@@ -41,7 +43,7 @@ type BrowserSpeechRecognition = {
   stop: () => void;
   abort: () => void;
 };
-type BrowserSpeechRecognitionConstructor = new () => BrowserSpeechRecognition;
+type BrowserSpeechRecognitionConstructor = (new () => BrowserSpeechRecognition) & LocalSpeechSupport;
 
 declare global {
   interface Window {
@@ -281,6 +283,20 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
   const [result, setResult] = useState<{ text: string; tone: "good" | "slow" | "wrong"; correctAnswer?: number } | null>(null);
   const [pendingWrong, setPendingWrong] = useState<PendingWrong | null>(null);
   const [speechSupported, setSpeechSupported] = useState(true);
+  const [localSpeechStatus, setLocalSpeechStatus] = useState<LocalSpeechStatus>("checking");
+  const localSpeechReadyRef = useRef(false);
+  const localSpeechPreparationRef = useRef<Promise<boolean> | null>(null);
+  const prepareSpeech = useCallback(() => {
+    if (localSpeechPreparationRef.current) return localSpeechPreparationRef.current;
+    const Recognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
+    const pending = prepareLocalSpeech(Recognition, setLocalSpeechStatus).then((ready) => {
+      localSpeechReadyRef.current = ready;
+      return ready;
+    }).finally(() => { localSpeechPreparationRef.current = null; });
+    localSpeechPreparationRef.current = pending;
+    return pending;
+  }, []);
+  useEffect(() => { void prepareSpeech(); }, [prepareSpeech]);
   const [questionReady, setQuestionReady] = useState(false);
 
   const loadStudents = useCallback(async () => {
@@ -492,6 +508,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     setResult(null);
     setListenState("Starting microphone…");
     const recognition = new Recognition();
+    if (localSpeechReadyRef.current) recognition.processLocally = true;
     recognition.lang = "en-US";
     recognition.continuous = false;
     recognition.interimResults = true;
@@ -545,6 +562,12 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     };
     recognition.onerror = (event: BrowserSpeechRecognitionErrorEvent) => {
       if (event.error === "no-speech") return;
+      if (recognition.processLocally && (event.error === "language-not-supported" || event.error === "service-not-allowed")) {
+        localSpeechReadyRef.current = false;
+        setLocalSpeechStatus("failed");
+        fail("On-device speech is unavailable. Tap Mic to retry with browser speech.");
+        return;
+      }
       const messages: Record<string, string> = {
         "not-allowed": "Allow microphone access, then tap Mic to retry.",
         "service-not-allowed": "Speech recognition is blocked by this browser. Check its permissions.",
@@ -773,6 +796,14 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
           <p className="muted">Choose your facts, then speak each answer aloud. Build confidence one question at a time.</p>
         </header>
         {!speechSupported && <p className="notice">This app requires speech recognition. Use the latest Chrome or Edge on a laptop or desktop, then allow microphone access.</p>}
+        {speechSupported && <div className="muted" role="status">
+          {localSpeechStatus === "ready" ? "Voice: on-device recognition ready." :
+            localSpeechStatus === "checking" ? "Voice: checking for on-device recognition…" :
+            localSpeechStatus === "downloading" ? "Voice: downloading the English speech pack for this browser. You can practice while it downloads." :
+            localSpeechStatus === "unsupported" ? "Voice: browser recognition. This browser does not offer the on-device English speech pack." :
+            "Voice: browser recognition. The on-device speech pack could not be prepared."}
+          {localSpeechStatus === "failed" && <button className="button secondary" onClick={() => void prepareSpeech()}>Retry speech download</button>}
+        </div>}
         <section className="session-settings" aria-labelledby="session-settings-title">
         <h2 id="session-settings-title">Your practice session</h2>
         <div className="form-row">

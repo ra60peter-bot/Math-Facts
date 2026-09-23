@@ -33,6 +33,7 @@ function harness() {
     questionStartRef: { current: 0 }, soundResponseMsRef: { current: null },
     answerHandledRef: { current: true }, timeoutRef: { current: null },
     recognitionRef: { current: null }, voiceMappingsRef: { current: {} },
+    localSpeechReadyRef: { current: false }, setLocalSpeechStatus() {},
     setSpeechSupported() {}, setQuestionReady() {}, setHeard() {}, setResult() {},
     setListenState: value => statuses.push(value),
     parseSpokenNumber: parser.exports.parseSpokenNumber,
