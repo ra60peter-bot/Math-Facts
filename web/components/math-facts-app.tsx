@@ -284,7 +284,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
   const [result, setResult] = useState<{ text: string; tone: "good" | "slow" | "wrong"; correctAnswer?: number } | null>(null);
   const [pendingWrong, setPendingWrong] = useState<PendingWrong | null>(null);
   const [speechSupported, setSpeechSupported] = useState(true);
-  const [localSpeechStatus, setLocalSpeechStatus] = useState<LocalSpeechStatus>("checking");
+  const [localSpeechStatus, setLocalSpeechStatus] = useState<LocalSpeechStatus | "browser">("browser");
   const [localSpeechError, setLocalSpeechError] = useState("");
   const localSpeechReadyRef = useRef(false);
   const localSpeechPreparationRef = useRef<Promise<boolean> | null>(null);
@@ -298,7 +298,6 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     localSpeechPreparationRef.current = pending;
     return pending;
   }, []);
-  useEffect(() => { void prepareSpeech(); }, [prepareSpeech]);
   const [questionReady, setQuestionReady] = useState(false);
 
   const loadStudents = useCallback(async () => {
@@ -808,13 +807,16 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
         </header>
         {!speechSupported && <p className="notice">This app requires speech recognition. Use the latest Chrome or Edge on a laptop or desktop, then allow microphone access.</p>}
         {speechSupported && <div className="muted" role="status">
-          {localSpeechStatus === "ready" ? "Voice: on-device recognition ready." :
+          {localSpeechStatus === "browser" ? "Voice: browser recognition." :
+            localSpeechStatus === "ready" ? "Voice: on-device recognition ready." :
             localSpeechStatus === "checking" ? "Voice: checking for on-device recognition…" :
             localSpeechStatus === "downloading" ? "Voice: downloading the English speech pack for this browser. You can practice while it downloads." :
             localSpeechStatus === "unsupported" ? "Voice: browser recognition. This browser does not offer the on-device English speech pack." :
             "Voice: browser recognition. The on-device speech pack could not be prepared."}
           {localSpeechStatus === "failed" && <button className="button secondary" onClick={() => void prepareSpeech()}>Retry speech download</button>}
           {localSpeechStatus === "failed" && localSpeechError && <p>{localSpeechError}</p>}
+          {localSpeechStatus === "browser" && <button className="button secondary" onClick={() => void prepareSpeech()}>Try on-device recognition</button>}
+          {localSpeechStatus === "ready" && <button className="button secondary" onClick={() => { localSpeechReadyRef.current = false; setLocalSpeechStatus("browser"); }}>Use browser recognition</button>}
         </div>}
         <section className="session-settings" aria-labelledby="session-settings-title">
         <h2 id="session-settings-title">Your practice session</h2>

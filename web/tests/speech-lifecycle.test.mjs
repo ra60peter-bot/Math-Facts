@@ -68,6 +68,18 @@ test("startup delay does not consume the four-second answer window", () => {
   assert.equal(h.context.questionStartRef.current, 1800);
   h.expire(); assert.equal(h.answers[0][3], 4000);
 });
+
+test("browser recognition remains the default until local speech is explicitly enabled", () => {
+  const h = harness();
+  assert.equal(h.recognition.processLocally, undefined);
+  assert.ok(!source.includes("useEffect(() => { void prepareSpeech(); }"));
+  h.context.localSpeechReadyRef.current = true;
+  h.context.listen({ id: "local" });
+  assert.equal(h.recognition.processLocally, true);
+  h.context.localSpeechReadyRef.current = false;
+  h.context.listen({ id: "browser" });
+  assert.equal(h.recognition.processLocally, undefined);
+});
 test("partial eight is retained and timed from speech onset", () => {
   const h = harness(); h.recognition.onstart(); h.clock(600); h.recognition.onspeechstart();
   h.clock(900); h.result("eight"); h.expire();
