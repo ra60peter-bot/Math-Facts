@@ -77,6 +77,22 @@ test("recognition end finalizes partial numbers without waiting for the deadline
   const h = harness(); h.recognition.onstart(); h.clock(700); h.result("ate"); h.recognition.onend();
   assert.equal(h.answers[0][2], 8); assert.equal(h.answers.length, 1);
 });
+
+test("speech end requests finalization once and waits for the completed number", () => {
+  const h = harness(); let stops = 0;
+  h.recognition.stop = () => { stops++; };
+  h.recognition.onstart(); h.clock(600); h.recognition.onspeechstart();
+  h.result("twenty"); h.recognition.onspeechend(); h.recognition.onspeechend();
+  assert.equal(stops, 1); assert.equal(h.answers.length, 0);
+  h.clock(1200); h.result("twenty one", true);
+  assert.equal(h.answers[0][2], 21); assert.equal(h.answers[0][3], 600);
+});
+
+test("speech-end stop failure preserves the answer deadline", () => {
+  const h = harness(); h.recognition.stop = () => { throw new Error("already stopped"); };
+  h.recognition.onstart(); h.recognition.onspeechend(); h.expire();
+  assert.equal(h.answers.length, 1); assert.equal(h.answers[0][3], 4000);
+});
 test("alternatives only replace an unrecognized transcript", () => {
   const h = harness(); h.recognition.onstart(); h.result("unrecognized", true, ["eight"]);
   assert.equal(h.answers[0][2], 8);

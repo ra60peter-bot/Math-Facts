@@ -36,6 +36,7 @@ type BrowserSpeechRecognition = {
   maxAlternatives: number;
   onstart: (() => void) | null;
   onspeechstart: (() => void) | null;
+  onspeechend: (() => void) | null;
   onresult: ((event: BrowserSpeechRecognitionEvent) => void) | null;
   onerror: ((event: BrowserSpeechRecognitionErrorEvent) => void) | null;
   onend: (() => void) | null;
@@ -353,6 +354,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
       recognition.onerror = null;
       recognition.onstart = null;
       recognition.onspeechstart = null;
+      recognition.onspeechend = null;
       recognition.abort();
     }
   }, []);
@@ -516,6 +518,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     let latestTranscript = "";
     let latestResponseMs = TIMEOUT_MS;
     let ready = false;
+    let finalizationRequested = false;
     const isActive = () => recognitionRef.current === recognition && !answerHandledRef.current;
     const fail = (message: string) => {
       if (!isActive()) return;
@@ -540,6 +543,13 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
       if (isActive() && ready && soundResponseMsRef.current === null) {
         soundResponseMsRef.current = Math.min(Math.round(performance.now() - questionStartRef.current), TIMEOUT_MS);
       }
+    };
+    recognition.onspeechend = () => {
+      if (!isActive() || !ready || finalizationRequested) return;
+      finalizationRequested = true;
+      // Ask for the final transcript when speech ends, rather than waiting
+      // for the service to close itself. Keep the answer deadline active.
+      try { recognition.stop(); } catch { /* It may already be stopping. */ }
     };
     recognition.onresult = (event: BrowserSpeechRecognitionEvent) => {
       if (!isActive() || !ready || !event.results.length) return;
