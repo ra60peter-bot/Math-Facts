@@ -565,20 +565,8 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
           if (parseSpokenNumber(alternative, voiceMappingsRef.current) !== null) { transcript = alternative; break; }
         }
       }
-      const receivedMs = Math.min(Math.round(performance.now() - questionStartRef.current), TIMEOUT_MS);
-      const parsed = parseSpokenNumber(transcript, voiceMappingsRef.current);
-      const previousParsed = parseSpokenNumber(latestTranscript, voiceMappingsRef.current);
-      const sameAnswer = latestTranscript !== "" && (parsed !== null
-        ? parsed === previousParsed
-        : transcript === latestTranscript);
-      // Safari may omit or delay speechstart and send the same answer again
-      // as a final result. Confirmation latency must not inflate answer time.
-      latestResponseMs = Math.min(
-        receivedMs,
-        soundResponseMsRef.current ?? TIMEOUT_MS,
-        sameAnswer ? latestResponseMs : TIMEOUT_MS,
-      );
       latestTranscript = transcript;
+      latestResponseMs = soundResponseMsRef.current ?? Math.min(Math.round(performance.now() - questionStartRef.current), TIMEOUT_MS);
       setHeard(transcript);
       if (event.results[event.results.length - 1]?.isFinal) finish();
     };

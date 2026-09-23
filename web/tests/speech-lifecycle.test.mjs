@@ -73,30 +73,6 @@ test("partial eight is retained and timed from speech onset", () => {
   h.clock(900); h.result("eight"); h.expire();
   assert.equal(h.answers[0][2], 8); assert.equal(h.answers[0][3], 600);
 });
-
-test("Safari final confirmation preserves the first matching answer timestamp", () => {
-  const h = harness(); h.recognition.onstart();
-  h.clock(650); h.result("six");
-  h.clock(1200); h.result("6");
-  h.clock(2100); h.result("six", true);
-  assert.equal(h.answers[0][2], 6); assert.equal(h.answers[0][3], 650);
-});
-
-test("late speechstart cannot move answer time past its first transcript", () => {
-  const h = harness(); h.recognition.onstart();
-  h.clock(700); h.result("six");
-  h.clock(1600); h.recognition.onspeechstart();
-  h.clock(2200); h.result("6", true);
-  assert.equal(h.answers[0][3], 700);
-});
-
-test("a changed number gets its own first-seen time when speechstart is absent", () => {
-  const h = harness(); h.recognition.onstart();
-  h.clock(500); h.result("twenty");
-  h.clock(950); h.result("twenty one");
-  h.clock(2200); h.result("21", true);
-  assert.equal(h.answers[0][2], 21); assert.equal(h.answers[0][3], 950);
-});
 test("recognition end finalizes partial numbers without waiting for the deadline", () => {
   const h = harness(); h.recognition.onstart(); h.clock(700); h.result("ate"); h.recognition.onend();
   assert.equal(h.answers[0][2], 8); assert.equal(h.answers.length, 1);
