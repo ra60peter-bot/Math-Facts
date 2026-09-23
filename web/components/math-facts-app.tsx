@@ -806,18 +806,25 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
           <p className="muted">Choose your facts, then speak each answer aloud. Build confidence one question at a time.</p>
         </header>
         {!speechSupported && <p className="notice">This app requires speech recognition. Use the latest Chrome or Edge on a laptop or desktop, then allow microphone access.</p>}
-        {speechSupported && <div className="muted" role="status">
-          {localSpeechStatus === "browser" ? "Voice: browser recognition." :
-            localSpeechStatus === "ready" ? "Voice: on-device recognition ready." :
-            localSpeechStatus === "checking" ? "Voice: checking for on-device recognition…" :
-            localSpeechStatus === "downloading" ? "Voice: downloading the English speech pack for this browser. You can practice while it downloads." :
-            localSpeechStatus === "unsupported" ? "Voice: browser recognition. This browser does not offer the on-device English speech pack." :
-            "Voice: browser recognition. The on-device speech pack could not be prepared."}
-          {localSpeechStatus === "failed" && <button className="button secondary" onClick={() => void prepareSpeech()}>Retry speech download</button>}
-          {localSpeechStatus === "failed" && localSpeechError && <p>{localSpeechError}</p>}
-          {localSpeechStatus === "browser" && <button className="button secondary" onClick={() => void prepareSpeech()}>Try on-device recognition</button>}
-          {localSpeechStatus === "ready" && <button className="button secondary" onClick={() => { localSpeechReadyRef.current = false; setLocalSpeechStatus("browser"); }}>Use browser recognition</button>}
-        </div>}
+        {speechSupported && <section className="voice-settings" aria-labelledby="voice-settings-title">
+          <div className="voice-settings-copy">
+            <div className="voice-settings-heading"><h2 id="voice-settings-title">Voice recognition</h2><span className="voice-mode">{localSpeechStatus === "ready" ? "On-device active" : "Browser active"}</span></div>
+            <div role="status">
+              <p>{localSpeechStatus === "browser" ? "Using your browser to hear answers. You can also try an English speech pack that runs on this device." :
+                localSpeechStatus === "ready" ? "The English speech pack is ready. Answers are recognized on this device." :
+                localSpeechStatus === "checking" ? "Checking whether this browser supports on-device recognition…" :
+                localSpeechStatus === "downloading" ? "Downloading the English speech pack. You can practice while it downloads." :
+                localSpeechStatus === "unsupported" ? "This browser does not support the on-device English speech pack. Browser recognition is still available." :
+                "The speech pack could not be prepared. You can still practice with browser recognition."}</p>
+              {localSpeechStatus === "failed" && localSpeechError && <p className="voice-error">{localSpeechError}</p>}
+            </div>
+          </div>
+          <div className="voice-settings-action">
+            {localSpeechStatus === "failed" && <button className="button primary" onClick={() => void prepareSpeech()}>Retry speech download</button>}
+            {localSpeechStatus === "browser" && <><button className="button primary" onClick={() => void prepareSpeech()}>Try on-device recognition</button><span>Optional · availability varies by browser</span></>}
+            {localSpeechStatus === "ready" && <button className="button secondary" onClick={() => { localSpeechReadyRef.current = false; setLocalSpeechStatus("browser"); }}>Use browser recognition</button>}
+          </div>
+        </section>}
         <section className="session-settings" aria-labelledby="session-settings-title">
         <h2 id="session-settings-title">Your practice session</h2>
         <div className="form-row">
@@ -853,9 +860,9 @@ function Stat({ label, value }: { label: string; value: string }) { return <div 
 
 function FactGrid({ operation, selected, onChange }: { operation: Operation; selected: Set<string>; onChange: (selected: Set<string>) => void }) {
   const cards = makeCards(operation);
-  const rows = [...new Set(cards.map((card) => card.a))];
-  const columns = [...new Set(cards.map((card) => card.b))];
-  const keyFor = (row: number, column: number) => `${operation}-${row}-${column}`;
+  const rows = [...new Set(cards.map((card) => card.b))];
+  const columns = [...new Set(cards.map((card) => card.a))];
+  const keyFor = (row: number, column: number) => `${operation}-${column}-${row}`;
   const validKeys = new Set(cards.map((card) => card.id));
   const toggleKeys = (keys: string[]) => {
     const next = new Set(selected);
@@ -870,7 +877,7 @@ function FactGrid({ operation, selected, onChange }: { operation: Operation; sel
       ? "Subtraction: positive answers using 1 through 10"
       : "Multiplication: 2 through 12";
 
-  return <section className="fact-selector" aria-labelledby="fact-selector-title"><div className="fact-selector-heading"><div><h2 id="fact-selector-title">Choose facts</h2><p className="muted">{description}</p></div><div className="selection-actions"><button className="button secondary" onClick={() => onChange(new Set(allKeys))}>Select all</button><button className="button secondary" onClick={() => onChange(new Set())}>Clear all</button></div></div><div className="fact-grid-scroll"><div className="fact-grid" style={{ gridTemplateColumns: `64px repeat(${columns.length}, minmax(38px, 1fr))` }}><AxisToggle label="All" keys={allKeys} selected={selected} onToggle={toggleKeys} />{columns.map((column) => <AxisToggle key={`column-${column}`} label={String(column)} keys={rows.map((row) => keyFor(row, column)).filter((key) => validKeys.has(key))} selected={selected} onToggle={toggleKeys} />)}{rows.map((row) => <div className="fact-grid-row" key={`row-${row}`} style={{ gridColumn: `1 / span ${columns.length + 1}`, gridTemplateColumns: `64px repeat(${columns.length}, minmax(38px, 1fr))` }}><AxisToggle label={String(row)} keys={columns.map((column) => keyFor(row, column)).filter((key) => validKeys.has(key))} selected={selected} onToggle={toggleKeys} />{columns.map((column) => { const key = keyFor(row, column); return validKeys.has(key) ? <label className="fact-cell" key={key} title={`${row} ${operationWord(operation)} ${column}`}><input type="checkbox" checked={selected.has(key)} onChange={() => toggleKeys([key])} /><span className="sr-only">{row} {operationWord(operation)} {column}</span></label> : <span className="fact-cell unavailable" aria-hidden="true" key={key} />; })}</div>)}</div></div><p className="grid-help">Select individual facts, or use a row or column to select a group.</p></section>;
+  return <section className="fact-selector" aria-labelledby="fact-selector-title"><div className="fact-selector-heading"><div><h2 id="fact-selector-title">Choose facts</h2><p className="muted">{description}</p></div><div className="selection-actions"><button className="button secondary" onClick={() => onChange(new Set(allKeys))}>Select all</button><button className="button secondary" onClick={() => onChange(new Set())}>Clear all</button></div></div><div className="fact-grid-scroll"><div className="fact-grid" style={{ gridTemplateColumns: `64px repeat(${columns.length}, minmax(38px, 1fr))` }}><AxisToggle label="All" keys={allKeys} selected={selected} onToggle={toggleKeys} />{columns.map((column) => <AxisToggle key={`column-${column}`} label={String(column)} keys={rows.map((row) => keyFor(row, column)).filter((key) => validKeys.has(key))} selected={selected} onToggle={toggleKeys} />)}{rows.map((row) => <div className="fact-grid-row" key={`row-${row}`} style={{ gridColumn: `1 / span ${columns.length + 1}`, gridTemplateColumns: `64px repeat(${columns.length}, minmax(38px, 1fr))` }}><AxisToggle label={String(row)} keys={columns.map((column) => keyFor(row, column)).filter((key) => validKeys.has(key))} selected={selected} onToggle={toggleKeys} />{columns.map((column) => { const key = keyFor(row, column); return validKeys.has(key) ? <label className="fact-cell" key={key} title={`${column} ${operationWord(operation)} ${row}`}><input type="checkbox" checked={selected.has(key)} onChange={() => toggleKeys([key])} /><span className="sr-only">{column} {operationWord(operation)} {row}</span></label> : <span className="fact-cell unavailable" aria-hidden="true" key={key} />; })}</div>)}</div></div><p className="grid-help">Top numbers = first number. Left numbers = second number. Select a row or column to choose a group.</p></section>;
 }
 
 function AxisToggle({ label, keys, selected, onToggle }: { label: string; keys: string[]; selected: Set<string>; onToggle: (keys: string[]) => void }) {
