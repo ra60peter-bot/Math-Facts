@@ -74,6 +74,15 @@ export function parseSpokenNumber(transcript: string, mappings: Record<string, n
   if (cleaned in mappings) return mappings[cleaned];
   if (cleaned in phraseToNumber) return phraseToNumber[cleaned];
 
+  // Recognition often formats spoken numbers as digits inside an answer
+  // phrase. Accept a single explicit answer, without extracting a number
+  // from an equation or from several competing answers.
+  const answerPhrase = cleaned.match(/^(?:(?:my |your |the )?answer(?: is)?|it is|it s|that is|that s)\s+(\d+)$/);
+  if (answerPhrase) {
+    const value = Number(answerPhrase[1]);
+    return Number.isSafeInteger(value) ? value : null;
+  }
+
   const tokens = cleaned.split(/\s+/).filter((word) => word in wordToNumber);
   if (tokens.length === 0) return null;
   let result = 0;

@@ -179,6 +179,15 @@ test("ten and forty survive word, digit, punctuation, filler and alternative tra
     assert.equal(h.answers[0][2], expected);
   }
 });
+
+test("digit answers inside answer phrases are recognized without guessing from equations", () => {
+  for (const transcript of ["Your answer is 10", "the answer is 10", "my answer is 10", "answer 10", "it's 10", "the answer is ten"]) {
+    const h = harness(); h.recognition.onstart(); h.clock(900); h.result(transcript, true);
+    assert.equal(h.answers[0][2], 10, transcript);
+  }
+  assert.equal(parser.exports.parseSpokenNumber("the answer is 10 or 40"), null);
+  assert.equal(parser.exports.parseSpokenNumber("2 + 8 = 10"), null);
+});
 test("unrecognized speech reaches wrong-answer review instead of getting stuck", () => {
   const h = harness(); h.recognition.onstart(); h.result("unrecognized", true);
   assert.equal(h.answers.length, 1); assert.equal(h.answers[0][2], null);
