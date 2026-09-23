@@ -547,10 +547,11 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
       }
     };
     recognition.onspeechend = () => {
-      if (!isActive() || !ready || finalizationRequested) return;
+      if (!isActive() || !ready || finalizationRequested || !latestTranscript) return;
       finalizationRequested = true;
-      // Ask for the final transcript when speech ends, rather than waiting
-      // for the service to close itself. Keep the answer deadline active.
+      // Only request finalization after words have arrived. For a short word
+      // such as "ten", speechend can precede the first transcript; stopping
+      // at that point can interrupt recognition. The deadline stays active.
       try { recognition.stop(); } catch { /* It may already be stopping. */ }
     };
     recognition.onresult = (event: BrowserSpeechRecognitionEvent) => {

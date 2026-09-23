@@ -150,8 +150,17 @@ test("speech end requests finalization once and waits for the completed number",
 
 test("speech-end stop failure preserves the answer deadline", () => {
   const h = harness(); h.recognition.stop = () => { throw new Error("already stopped"); };
-  h.recognition.onstart(); h.recognition.onspeechend(); h.expire();
+  h.recognition.onstart(); h.result("unrecognized"); h.clock(4000); h.result("unrecognized"); h.recognition.onspeechend(); h.expire();
   assert.equal(h.answers.length, 1); assert.equal(h.answers[0][3], 4000);
+});
+
+test("short ten can arrive after speechend without the app stopping recognition early", () => {
+  const h = harness(); let stops = 0; h.recognition.stop = () => { stops++; };
+  h.recognition.onstart(); h.clock(700); h.recognition.onspeechstart();
+  h.clock(900); h.recognition.onspeechend();
+  assert.equal(stops, 0); assert.equal(h.answers.length, 0);
+  h.clock(1000); h.result("ten", true);
+  assert.equal(h.answers[0][2], 10); assert.equal(h.answers[0][3], 700);
 });
 test("alternatives only replace an unrecognized transcript", () => {
   const h = harness(); h.recognition.onstart(); h.result("unrecognized", true, ["eight"]);
