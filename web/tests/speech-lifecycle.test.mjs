@@ -133,6 +133,17 @@ test("alternatives only replace an unrecognized transcript", () => {
   const wrong = harness(); wrong.recognition.onstart(); wrong.result("seven", true, ["eight"]);
   assert.equal(wrong.answers[0][2], 7);
 });
+
+test("ten and forty survive word, digit, punctuation, filler and alternative transcripts", () => {
+  for (const [transcript, expected] of [["ten", 10], ["10.", 10], ["um 10", 10], ["tin", 10], ["forty", 40], ["40!", 40], ["uh 40", 40], ["fourty", 40]]) {
+    const h = harness(); h.recognition.onstart(); h.clock(900); h.result(transcript, true);
+    assert.equal(h.answers[0][2], expected, transcript);
+  }
+  for (const [word, expected] of [["ten", 10], ["forty", 40]]) {
+    const h = harness(); h.recognition.onstart(); h.result("unrecognized", true, [word]);
+    assert.equal(h.answers[0][2], expected);
+  }
+});
 test("unrecognized speech reaches wrong-answer review instead of getting stuck", () => {
   const h = harness(); h.recognition.onstart(); h.result("unrecognized", true);
   assert.equal(h.answers.length, 1); assert.equal(h.answers[0][2], null);

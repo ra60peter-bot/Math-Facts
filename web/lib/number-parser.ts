@@ -41,7 +41,7 @@ const phraseToNumber: Record<string, number> = {};
 for (const answer of VALID_ANSWERS) for (const phrase of numberToPhrases(answer)) phraseToNumber[phrase] = answer;
 Object.assign(phraseToNumber, {
   twelfth: 12, twelth: 12, free: 3, tree: 3, fife: 5, for: 4, fore: 4, fourth: 4,
-  ate: 8, age: 8, nein: 9, mine: 9, tin: 10,
+  ate: 8, age: 8, nein: 9, mine: 9, tin: 10, fourty: 40,
 });
 
 const wordToNumber: Record<string, number> = Object.fromEntries(Object.entries(ones).map(([value, word]) => [word, Number(value)]));
@@ -66,6 +66,11 @@ export function parseSpokenNumber(transcript: string, mappings: Record<string, n
   if (spoken in phraseToNumber) return phraseToNumber[spoken];
 
   const cleaned = spoken.split(/\s+/).filter((word) => !["unk", "uh", "um", "the"].includes(word)).join(" ");
+  // Browsers can return digits with a filler ("um 40"), not just words.
+  if (/^\d+$/.test(cleaned)) {
+    const value = Number(cleaned);
+    return Number.isSafeInteger(value) ? value : null;
+  }
   if (cleaned in mappings) return mappings[cleaned];
   if (cleaned in phraseToNumber) return phraseToNumber[cleaned];
 
