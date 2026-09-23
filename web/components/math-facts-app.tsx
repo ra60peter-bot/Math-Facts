@@ -791,7 +791,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
         <div className="stats">
           <Stat label="Accuracy" value={`${Math.round((currentSession.attempts.filter((attempt) => attempt.answerCorrect).length / Math.max(currentSession.attempts.length, 1)) * 100)}%`} />
           <Stat label="Questions" value={String(currentSession.attempts.length)} />
-          <Stat label="Mastery" value={`${summary.score}/1000`} />
+          <Stat label="Average response time" value={currentSession.attempts.length ? `${(currentSession.attempts.reduce((sum, attempt) => sum + attempt.responseMs, 0) / currentSession.attempts.length / 1000).toFixed(1)}s` : "—"} />
         </div>
         <div className="form-row">
           <button className="button primary" onClick={() => setPhase("setup")}>New session</button>
