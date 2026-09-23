@@ -285,12 +285,13 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
   const [pendingWrong, setPendingWrong] = useState<PendingWrong | null>(null);
   const [speechSupported, setSpeechSupported] = useState(true);
   const [localSpeechStatus, setLocalSpeechStatus] = useState<LocalSpeechStatus>("checking");
+  const [localSpeechError, setLocalSpeechError] = useState("");
   const localSpeechReadyRef = useRef(false);
   const localSpeechPreparationRef = useRef<Promise<boolean> | null>(null);
   const prepareSpeech = useCallback(() => {
     if (localSpeechPreparationRef.current) return localSpeechPreparationRef.current;
     const Recognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
-    const pending = prepareLocalSpeech(Recognition, setLocalSpeechStatus).then((ready) => {
+    const pending = prepareLocalSpeech(Recognition, setLocalSpeechStatus, setLocalSpeechError).then((ready) => {
       localSpeechReadyRef.current = ready;
       return ready;
     }).finally(() => { localSpeechPreparationRef.current = null; });
@@ -813,6 +814,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
             localSpeechStatus === "unsupported" ? "Voice: browser recognition. This browser does not offer the on-device English speech pack." :
             "Voice: browser recognition. The on-device speech pack could not be prepared."}
           {localSpeechStatus === "failed" && <button className="button secondary" onClick={() => void prepareSpeech()}>Retry speech download</button>}
+          {localSpeechStatus === "failed" && localSpeechError && <p>{localSpeechError}</p>}
         </div>}
         <section className="session-settings" aria-labelledby="session-settings-title">
         <h2 id="session-settings-title">Your practice session</h2>

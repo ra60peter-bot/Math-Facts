@@ -1,6 +1,6 @@
 export type LocalSpeechSupport = {
   available?: (options: { langs: string[]; processLocally: boolean }) => Promise<string>;
-  install?: (options: { langs: string[] }) => Promise<boolean>;
+  install?: (options: { langs: string[]; processLocally: boolean }) => Promise<boolean>;
 };
 
 export type LocalSpeechStatus = "checking" | "downloading" | "ready" | "unsupported" | "failed";
@@ -10,7 +10,9 @@ export type LocalSpeechStatus = "checking" | "downloading" | "ready" | "unsuppor
 export async function prepareLocalSpeech(
   recognition: LocalSpeechSupport | undefined,
   report: (status: LocalSpeechStatus) => void,
+  reportError: (message: string) => void = () => {},
 ): Promise<boolean> {
+  reportError("");
   if (!recognition?.available || !recognition.install) {
     report("unsupported");
     return false;
@@ -24,11 +26,14 @@ export async function prepareLocalSpeech(
       report("unsupported"); return false;
     }
     report("downloading");
-    const installed = await recognition.install({ langs: options.langs });
+    const installed = await recognition.install(options);
     const ready = installed && await recognition.available(options) === "available";
+    if (!ready) reportError("The browser did not finish installing the English speech pack. Try again while connected to the internet.");
     report(ready ? "ready" : "failed");
     return ready;
-  } catch {
+  } catch (error) {
+    const detail = error && typeof error === "object" && "message" in error ? String(error.message) : "No error details were provided.";
+    reportError(`Browser reported: ${detail}`);
     report("failed");
     return false;
   }

@@ -21,8 +21,18 @@ test("installed language packs are reused", async () => {
 });
 test("download is verified before local recognition is enabled", async () => {
   const statuses = []; let checks = 0;
-  assert.equal(await prepareLocalSpeech({ available: async () => ++checks === 1 ? "downloadable" : "available", install: async () => true }, value => statuses.push(value)), true);
+  assert.equal(await prepareLocalSpeech({ available: async () => ++checks === 1 ? "downloadable" : "available", install: async options => {
+    assert.equal(options.processLocally, true);
+    assert.equal(options.langs.join(","), "en-US");
+    return true;
+  } }, value => statuses.push(value)), true);
   assert.deepEqual(statuses, ["checking", "downloading", "ready"]);
+});
+
+test("browser error details are provided when preparing local speech fails", async () => {
+  const messages = [];
+  assert.equal(await prepareLocalSpeech({ available: async () => { throw new Error("Download blocked"); }, install: async () => true }, () => {}, message => messages.push(message)), false);
+  assert.equal(messages.at(-1), "Browser reported: Download blocked");
 });
 test("failed or blocked downloads leave browser speech available", async () => {
   for (const install of [async () => false, async () => { throw new Error("blocked"); }]) {
