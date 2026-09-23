@@ -21,7 +21,7 @@ const compiled = ts.transpileModule(source.slice(start, end) + "\nglobalThis.lis
 
 function harness() {
   let now = 0, id = 0, recognizer;
-  const timers = new Map(), answers = [], statuses = [];
+  const timers = new Map(), answers = [], statuses = [], feedback = [];
   const context = {
     useCallback: fn => fn, TIMEOUT_MS: 4000,
     window: {
@@ -34,7 +34,8 @@ function harness() {
     answerHandledRef: { current: true }, timeoutRef: { current: null },
     recognitionRef: { current: null }, voiceMappingsRef: { current: {} },
     localSpeechReadyRef: { current: false }, setLocalSpeechStatus() {},
-    setSpeechSupported() {}, setQuestionReady() {}, setHeard() {}, setResult() {},
+    setSpeechSupported() {}, setQuestionReady() {}, setHeard() {}, setResult(value) { feedback.push(value); },
+    answerFor: () => 28,
     setListenState: value => statuses.push(value),
     parseSpokenNumber: parser.exports.parseSpokenNumber,
     stopListening() {
@@ -51,7 +52,7 @@ function harness() {
   vm.runInNewContext(compiled, context);
   context.listen({ id: "test" });
   return {
-    answers, statuses, context,
+    answers, statuses, context, feedback,
     get recognition() { return recognizer; },
     clock(value) { now = value; },
     expire() { const timer = [...timers.values()].sort((a, b) => a.at - b.at)[0]; assert.ok(timer); now = timer.at; timer.fn(); },
@@ -67,6 +68,27 @@ test("startup delay does not consume the four-second answer window", () => {
   const h = harness(); h.clock(1800); h.recognition.onstart();
   assert.equal(h.context.questionStartRef.current, 1800);
   h.expire(); assert.equal(h.answers[0][3], 4000);
+});
+
+test("live numeric feedback appears immediately without prematurely saving a partial answer", () => {
+  const h = harness(); h.recognition.onstart(); h.clock(700);
+  h.result("twenty");
+  assert.equal(h.feedback.at(-1).tone, "wrong");
+  assert.equal(h.answers.length, 0);
+  h.clock(800); h.result("twenty eight");
+  assert.equal(h.feedback.at(-1).text, "Correct! 0.8 seconds");
+  assert.equal(h.answers.length, 0);
+  h.clock(1800); h.result("twenty eight", true);
+  assert.equal(h.answers.length, 1);
+  assert.equal(h.answers[0][2], 28);
+  assert.equal(h.answers[0][3], 800);
+});
+
+test("revised nonnumeric transcript and recognition failures clear live feedback", () => {
+  const h = harness(); h.recognition.onstart(); h.result("28");
+  h.result("unrecognized"); assert.equal(h.feedback.at(-1), null);
+  h.result("28"); h.recognition.onerror({ error: "network" });
+  assert.equal(h.feedback.at(-1), null); assert.equal(h.answers.length, 0);
 });
 
 test("browser recognition remains the default until local speech is explicitly enabled", () => {

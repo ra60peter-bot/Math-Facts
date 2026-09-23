@@ -523,6 +523,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     const fail = (message: string) => {
       if (!isActive()) return;
       stopListening();
+      setResult(null);
       setListenState(message);
     };
     const finish = () => {
@@ -565,10 +566,25 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
           if (parseSpokenNumber(alternative, voiceMappingsRef.current) !== null) { transcript = alternative; break; }
         }
       }
+      const parsedNumber = parseSpokenNumber(transcript, voiceMappingsRef.current);
+      const sameNumber = parsedNumber !== null && parsedNumber === parseSpokenNumber(latestTranscript, voiceMappingsRef.current);
+      // Keep the time already displayed when the final event merely confirms
+      // the same number. A revised number gets its own arrival time.
+      if (!sameNumber) latestResponseMs = soundResponseMsRef.current ?? Math.min(Math.round(performance.now() - questionStartRef.current), TIMEOUT_MS);
       latestTranscript = transcript;
-      latestResponseMs = soundResponseMsRef.current ?? Math.min(Math.round(performance.now() - questionStartRef.current), TIMEOUT_MS);
       setHeard(transcript);
-      if (event.results[event.results.length - 1]?.isFinal) finish();
+      if (event.results[event.results.length - 1]?.isFinal) {
+        finish();
+      } else {
+        // Show feedback alongside the live transcript. Do not stop recognition or
+        // save an attempt yet: a partial "twenty" can still become "twenty eight".
+        const parsed = parseSpokenNumber(transcript, voiceMappingsRef.current);
+        const correct = parsed === answerFor(card);
+        const elapsed = `${(latestResponseMs / 1000).toFixed(1)} seconds`;
+        setResult(parsed === null ? null : correct
+          ? { text: `${latestResponseMs <= 1500 ? "Correct!" : "Slow!"} ${elapsed}`, tone: latestResponseMs <= 1500 ? "good" : "slow" }
+          : { text: `Wrong! ${elapsed}`, tone: "wrong" });
+      }
     };
     recognition.onerror = (event: BrowserSpeechRecognitionErrorEvent) => {
       if (event.error === "no-speech") return;
@@ -750,7 +766,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
           <div className={`fact ${questionReady ? "" : "fact-preparing"}`}>{questionReady ? <>{current.a} {operationSymbol(current.operation)} {current.b}</> : "Get ready…"}</div>
           <div className="practice-feedback" aria-live="polite" aria-atomic="true">
             <div className={`result ${result?.tone ?? ""}`}>{result?.text ?? (questionReady ? "Say your answer aloud" : "Waiting for the microphone")}</div>
-            <div className="answer-reveal">{result?.tone === "wrong" ? `Correct answer: ${result.correctAnswer}` : ""}</div>
+            <div className="answer-reveal">{result?.correctAnswer !== undefined ? `Correct answer: ${result.correctAnswer}` : ""}</div>
           </div>
         </section>
         <footer className="practice-controls">
@@ -762,7 +778,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
             </div>
           </div>
           <div className="answer-actions">
-            {result?.tone === "wrong" && <>
+            {pendingWrong && <>
               {pendingWrong?.transcript && <>
                 <p className="accept-answer-prompt">Accept “{pendingWrong.transcript}” as the correct answer?</p>
                 <button className="button secondary" onClick={allowPendingAnswer}>Yes, accept answer</button>
