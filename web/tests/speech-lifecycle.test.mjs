@@ -112,6 +112,32 @@ test("recognition end finalizes partial numbers without waiting for the deadline
   assert.equal(h.answers[0][2], 8); assert.equal(h.answers.length, 1);
 });
 
+test("empty recognition restarts within the original deadline and can hear ten or forty", () => {
+  for (const [word, expected] of [["ten", 10], ["forty", 40]]) {
+    const h = harness(); let restarts = 0; h.recognition.start = () => { restarts++; };
+    h.recognition.onstart(); h.clock(500); h.result("", true); h.recognition.onend();
+    assert.equal(restarts, 1); assert.equal(h.answers.length, 0);
+    h.clock(700); h.recognition.onstart();
+    assert.equal(h.context.questionStartRef.current, 0);
+    h.clock(1100); h.result(word, true);
+    assert.equal(h.answers[0][2], expected); assert.equal(h.answers[0][3], 1100);
+  }
+});
+
+test("empty recovery is bounded and does not extend the four-second timeout", () => {
+  const h = harness(); let restarts = 0; h.recognition.start = () => { restarts++; };
+  h.recognition.onstart(); h.clock(500);
+  h.recognition.onend(); h.recognition.onend(); h.recognition.onend();
+  assert.equal(restarts, 2); h.expire();
+  assert.equal(h.answers.length, 1); assert.equal(h.answers[0][3], 4000);
+});
+
+test("empty final transcript does not erase an already recognized number", () => {
+  const h = harness(); h.recognition.onstart(); h.clock(800); h.result("forty");
+  h.result("", true); h.recognition.onend();
+  assert.equal(h.answers[0][2], 40); assert.equal(h.answers[0][3], 800);
+});
+
 test("speech end requests finalization once and waits for the completed number", () => {
   const h = harness(); let stops = 0;
   h.recognition.stop = () => { stops++; };

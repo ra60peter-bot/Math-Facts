@@ -519,6 +519,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     let latestResponseMs = TIMEOUT_MS;
     let ready = false;
     let finalizationRequested = false;
+    let emptyRestarts = 0;
     const isActive = () => recognitionRef.current === recognition && !answerHandledRef.current;
     const fail = (message: string) => {
       if (!isActive()) return;
@@ -566,6 +567,9 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
           if (parseSpokenNumber(alternative, voiceMappingsRef.current) !== null) { transcript = alternative; break; }
         }
       }
+      // An empty browser result is not an answer. Keep listening within the
+      // original deadline, and don't erase a number already heard.
+      if (!transcript) return;
       const parsedNumber = parseSpokenNumber(transcript, voiceMappingsRef.current);
       const sameNumber = parsedNumber !== null && parsedNumber === parseSpokenNumber(latestTranscript, voiceMappingsRef.current);
       // Keep the time already displayed when the final event merely confirms
@@ -606,7 +610,15 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
       if (!isActive()) return;
       if (!ready) fail("Microphone did not start. Tap Mic to retry.");
       else if (latestTranscript) finish();
-      else setListenState("No speech detected");
+      else if (emptyRestarts < 2 && performance.now() - questionStartRef.current < TIMEOUT_MS) {
+        emptyRestarts += 1;
+        finalizationRequested = false;
+        setListenState("Listening — please repeat your answer");
+        // Reuse the original question start and deadline: recovery must not
+        // give extra answer time or record a second attempt.
+        try { recognition.start(); }
+        catch { fail("Microphone stopped. Tap Mic to retry."); }
+      } else setListenState("No speech detected — tap Mic to retry");
     };
     recognitionRef.current = recognition;
     // Startup failures do not count as a student's answer or consume answer time.
