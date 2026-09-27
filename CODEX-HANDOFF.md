@@ -2,6 +2,14 @@
 
 Updated September 27, 2026. Read this before continuing work.
 
+### Password required for student deletion (latest)
+
+Student deletion now uses a shared password dialog in both Students and Admin. The password starts empty on every opening, clears on submission/failure/cancel, and is never saved. The server requires a nonempty password and reauthenticates the acting account (including admins) using a separate nonpersistent Supabase client; the verified user ID must match the bearer-token identity. Ownership/admin checks remain. The temporary verification session is revoked with local scope, leaving the browser sign-in intact. Failed verification, rate limiting, and network errors prevent deletion.
+
+Google-only accounts need a Math Facts password, not their Google password. The dialog offers a user-triggered password setup/reset email using the existing /auth/callback route, whose wording now supports invitations and resets. No email was sent and no real password changed during this work. No student records were deleted for testing.
+
+Migration 008_require_student_delete_password.sql WAS applied to production through the Supabase SQL editor. It revokes DELETE on students from public/anon/authenticated and removes the permissive deletion policy, preventing direct REST bypass. Verified database privileges: authenticated DELETE=false, service_role DELETE=true. This is unrelated to the previously canceled history/FSRS deletion request. 71 regression tests pass, including missing/malformed/wrong password, admin verification, identity mismatch, isolated sessions, and fail-closed errors. Browser fixture verified disabled empty submission, masked entry, rejection without deletion, cleared password, cancel/reopen, and modal layout. The temporary fixture was removed. Email delivery and real-account password verification were not exercised.
+
 ### 108 zero time and interim Wrong flash (latest)
 
 User reports "one oh eight" recognized as108 with0.0s, and a red Wrong flash before Correct. The interim UI was judging partial numeric prefixes (one→one oh→one oh eight). Mismatching interim transcripts now remain neutral; only completed answers show Wrong. Matching interim feedback remains immediate.
