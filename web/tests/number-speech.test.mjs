@@ -8,6 +8,8 @@ const root = path.resolve(import.meta.dirname, "..");
 const compile = file => ts.transpileModule(fs.readFileSync(path.join(root, file), "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
 const parser = { exports: {} };
 vm.runInNewContext(compile("lib/number-parser.ts"), {exports: parser.exports});
+const onset = {exports:{}};
+vm.runInNewContext(compile("lib/speech-onset.ts"), {exports:onset.exports});
 
 async function harness({ pendingPermission = false, autoReveal = true } = {}) {
   const events = [], buffers = [], outputs = [], timers = new Map();
@@ -29,7 +31,7 @@ async function harness({ pendingPermission = false, autoReveal = true } = {}) {
   }
   const exports = {};
   const context = {
-    exports, require: name => name === "vosk-browser" ? {Model} : parser.exports,
+    exports, require: name => name === "vosk-browser" ? {Model} : name === "./speech-onset" ? onset.exports : parser.exports,
     performance: {now: () => now},
     window: {setTimeout: fn => {const id=timers.size+1;timers.set(id,fn);return id;},clearTimeout:id=>timers.delete(id)},
     navigator: {mediaDevices:{getUserMedia: () => pendingPermission ? new Promise(resolve=>{resolveStream=resolve;}) : Promise.resolve(stream)}},
@@ -132,6 +134,29 @@ test("actual capture starts readiness and pre-reveal samples never enter the dec
   assert.equal(h.buffers[0].length,704); // first 20ms precede reveal
   h.decoder.handlers.result({event:"result",result:{text:"one thirty two",result:[{word:"one",start:1.3,end:1.5}]}});
   assert.equal(resultEvents[0].speechStartedAt,4320);
+  h.recognition.abort();
+});
+
+test("a zero-aligned one in one oh eight uses the audio onset instead of zero seconds",async()=>{
+  const h=await harness();const results=[];h.recognition.onresult=event=>results.push(event);
+  // Background noise, a 10ms startup click, 1.2s thought time, then speech.
+  const samples=new Float32Array(32000).fill(0.001);
+  samples.fill(0.2,1600,1760);
+  samples.fill(0.05,19200,25600);
+  h.capture.port.onmessage({data:{samples,startFrame:9024}});
+  h.decoder.handlers.result({event:"result",result:{text:"one oh eight",result:[
+    {word:"one",start:0,end:1.6},{word:"oh",start:1.6,end:1.8},{word:"eight",start:1.8,end:2}
+  ]}});
+  assert.equal(results[0].speechStartedAt,2200);
+  assert.equal(results[0].results[0][0].transcript,"one oh eight");
+  h.recognition.abort();
+});
+
+test("ambiguous zero-aligned background noise has no fabricated acoustic timestamp",async()=>{
+  const h=await harness();let result;h.recognition.onresult=event=>{result=event;};
+  h.capture.port.onmessage({data:{samples:new Float32Array(32000).fill(0.01),startFrame:9024}});
+  h.decoder.handlers.result({event:"result",result:{text:"one oh eight",result:[{word:"one",start:0,end:1.5}]}});
+  assert.equal(result.speechStartedAt,undefined);
   h.recognition.abort();
 });
 

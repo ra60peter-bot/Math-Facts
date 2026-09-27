@@ -528,6 +528,8 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     let retryWithoutHints = false;
     let latestTranscript = "";
     let latestResponseMs = TIMEOUT_MS;
+    let firstNumberAt: number | null = null;
+    let timingEstimated = false;
     let ready = false;
     let revealScheduled = false;
     let emptyRestarts = 0;
@@ -559,10 +561,14 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
         return;
       }
       if (recognition.usesWordTiming && soundResponseMsRef.current === null) {
-        fail("The answer was heard, but its start time could not be measured. Tap Mic to retry. No answer was scored.");
-        return;
+        // Keep the understood answer. An unavailable acoustic boundary must
+        // not invent a zero time; transcript arrival is an explicit estimate.
+        latestResponseMs = Math.min(Math.max(0, Math.round((firstNumberAt ?? performance.now()) - questionStartRef.current)), TIMEOUT_MS);
+        timingEstimated = true;
+        log("Speech onset unavailable; response time estimated from first numeric transcript");
       }
       handleResponse(card, latestTranscript, parsed, latestTranscript ? latestResponseMs : TIMEOUT_MS);
+      if (timingEstimated) setListenState("Answer recorded — response time estimated from recognition");
     };
     const answerDeadline = () => {
       if (!isActive()) return;
@@ -625,16 +631,17 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
       // An empty browser result is not an answer. Keep listening within the
       // original deadline, and don't erase a number already heard.
       if (!transcript) return;
+      if (parsedNumber !== null && firstNumberAt === null) firstNumberAt = performance.now();
       if (recognition.usesWordTiming && Number.isFinite(event.speechStartedAt)) {
         const onset = event.speechStartedAt!;
         // Word boundaries are estimates. Do not reject an understood answer
         // because of a clock/boundary mismatch, or turn it into a zero score.
         const measured = onset - questionStartRef.current;
-        soundResponseMsRef.current = measured >= 0
+        soundResponseMsRef.current = measured >= 50
           ? Math.min(Math.round(measured), TIMEOUT_MS)
-          : Math.min(Math.round(performance.now() - questionStartRef.current), TIMEOUT_MS);
-        if (measured < 0) log("Word timing unavailable: using recognition arrival time for this answer");
-        latestResponseMs = soundResponseMsRef.current;
+          : null;
+        if (measured < 50) log("Zero/early word boundary rejected as a reliable response time");
+        if (soundResponseMsRef.current !== null) latestResponseMs = soundResponseMsRef.current;
       }
       const sameNumber = parsedNumber !== null && parsedNumber === parseSpokenNumber(latestTranscript, voiceMappingsRef.current);
       // Keep the time already displayed when the final event merely confirms
@@ -653,12 +660,12 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
         const correct = parsed === answerFor(card);
         const elapsed = `${(latestResponseMs / 1000).toFixed(1)} seconds`;
         const awaitingTiming = recognition.usesWordTiming && soundResponseMsRef.current === null;
-        setResult(parsed === null ? null : awaitingTiming
-          ? { text: correct ? "Correct!" : "Wrong!", tone: correct ? "good" : "wrong" }
-          : correct
-          ? { text: `${latestResponseMs <= 1500 ? "Correct!" : "Slow!"} ${elapsed}`, tone: latestResponseMs <= 1500 ? "good" : "slow" }
-          : { text: `Wrong! ${elapsed}`, tone: "wrong" });
-        if (parsed === null) setListenState("Listening — waiting for the number…");
+        // A partial "one" can still become "one oh eight". Only a completed
+        // answer may show Wrong; matching interim answers stay responsive.
+        setResult(!correct ? null : awaitingTiming
+          ? { text: "Correct!", tone: "good" }
+          : { text: `${latestResponseMs <= 1500 ? "Correct!" : "Slow!"} ${elapsed}`, tone: latestResponseMs <= 1500 ? "good" : "slow" });
+        if (!correct) setListenState("Listening — finishing your answer…");
       }
     };
     recognition.onerror = (event: BrowserSpeechRecognitionErrorEvent) => {

@@ -1,6 +1,7 @@
 import type { Model, KaldiRecognizer } from "vosk-browser";
 import type { BrowserSpeechRecognition } from "./browser-speech";
 import { numberToPhrases } from "./number-parser";
+import { SpeechOnset } from "./speech-onset";
 
 export const NUMBER_MODEL_URL = "/models/english-numbers-0.15.tar.gz";
 // Include every number, including wrong answers, and an unknown-word path.
@@ -65,6 +66,7 @@ export class NumberSpeechRecognition implements BrowserSpeechRecognition {
   private audioStartedAt: number | null = null;
   private answerWindowStart: number | null = null;
   private speechStartedAt: number | null = null;
+  private onset = new SpeechOnset();
   private finalRequested = false;
   private flushTimer: number | undefined;
 
@@ -76,6 +78,7 @@ export class NumberSpeechRecognition implements BrowserSpeechRecognition {
     this.audioStartedAt = null;
     this.answerWindowStart = null;
     this.speechStartedAt = null;
+    this.onset = new SpeechOnset();
     this.finalRequested = false;
     this.onstart?.();
     void this.openAudio();
@@ -105,7 +108,8 @@ export class NumberSpeechRecognition implements BrowserSpeechRecognition {
         // audio, not when decoding finishes. Ignore unrelated noise/[unk].
         const firstWord = message.result.result?.find((word) => word.word !== "[unk]" && Number.isFinite(word.start) && word.start >= 0);
         if (firstWord && this.audioStartedAt !== null && this.speechStartedAt === null) {
-          this.speechStartedAt = this.audioStartedAt + firstWord.start * 1000;
+          const start = this.onset.resolve(firstWord.start, firstWord.end);
+          if (start !== undefined) this.speechStartedAt = this.audioStartedAt + start * 1000;
         }
         if (message.result.text) this.deliver(message.result.text, true);
         if (this.state === "draining") { this.cleanup(); this.onend?.(); }
@@ -130,6 +134,7 @@ export class NumberSpeechRecognition implements BrowserSpeechRecognition {
             const samples = trim ? data.samples.slice(trim) : data.samples;
             if (samples.length) {
               if (this.audioStartedAt === null) this.audioStartedAt = capturedAt + trim / context.sampleRate * 1000;
+              this.onset.add(samples, context.sampleRate);
               if (!this.sound && this.state === "recording") {
                 const rms = Math.sqrt(samples.reduce((sum, value) => sum + value * value, 0) / samples.length);
                 if (rms > 0.008) { this.sound = true; this.onsoundstart?.(); }

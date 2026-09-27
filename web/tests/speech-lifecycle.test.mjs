@@ -107,7 +107,7 @@ test("number engine scores word onset, not startup noise or delayed transcript a
   h.clock(1000); h.startAudio();
   h.clock(1100); h.recognition.onsoundstart();
   h.clock(3500); h.result("twenty seven");
-  assert.equal(h.feedback.at(-1).text, "Wrong!");
+  assert.equal(h.feedback.at(-1), null);
   assert.equal(h.answers.length, 0);
   h.clock(4200);
   h.recognition.onresult({results:[{0:{transcript:"twenty seven"},length:1,isFinal:true}],speechStartedAt:2700});
@@ -124,12 +124,13 @@ test("number engine flushes timing at deadline even with an interim number", () 
   assert.equal(h.answers[0][3],3100);
 });
 
-test("missing word timing cannot create a falsely fast score", () => {
-  for (const onset of [undefined]) {
+test("missing or zero word timing keeps the answer with an explicitly estimated nonzero duration", () => {
+  for (const onset of [undefined,1000,1005]) {
     const h = harness(); h.recognition.usesWordTiming = true;
     h.clock(1000); h.startAudio(); h.clock(2000);
     h.recognition.onresult({results:[{0:{transcript:"two"},length:1,isFinal:true}],speechStartedAt:onset});
-    assert.equal(h.answers.length,0); assert.match(h.statuses.at(-1), /No answer was scored/);
+    assert.equal(h.answers.length,1);assert.equal(h.answers[0][3],1000);
+    assert.match(h.statuses.at(-1), /response time estimated/);
   }
 });
 
@@ -182,8 +183,7 @@ test("a single syllable delayed 1.5 seconds is not discarded by the old 800ms pr
     h.startAudio(); h.clock(3700); h.recognition.onspeechstart(); h.expire();
     assert.equal(captureStoppedAt, 4000);
     h.advance(5200); h.result("two");
-    assert.equal(h.feedback.at(-1).tone, "wrong"); // test card expects 28
-    assert.ok(h.feedback.at(-1).text.includes("3.7 seconds"));
+    assert.equal(h.feedback.at(-1),null); // unfinished wrong numbers stay neutral
     h.clock(5700); h.result("two", true);
     assert.equal(h.answers.length, 1); assert.equal(h.answers[0][2], 2); assert.equal(h.answers[0][3], 3700);
   }
@@ -241,7 +241,7 @@ test("on-device end during finalization and late results do not score an empty a
 test("live numeric feedback appears immediately without prematurely saving a partial answer", () => {
   const h = harness(); h.startAudio(); h.clock(700);
   h.result("twenty");
-  assert.equal(h.feedback.at(-1).tone, "wrong");
+  assert.equal(h.feedback.at(-1),null);
   assert.equal(h.answers.length, 0);
   h.clock(800); h.result("twenty eight");
   assert.equal(h.feedback.at(-1).text, "Correct! 0.8 seconds");
@@ -250,6 +250,19 @@ test("live numeric feedback appears immediately without prematurely saving a par
   assert.equal(h.answers.length, 1);
   assert.equal(h.answers[0][2], 28);
   assert.equal(h.answers[0][3], 800);
+});
+
+test("one oh eight never flashes Wrong while its partial words are arriving",()=>{
+  for(const local of [false,true]) {
+    const h=harness();h.recognition.usesWordTiming=local;h.context.answerFor=()=>108;
+    h.clock(1000);h.startAudio();h.clock(2400);
+    h.result("one");h.result("one oh");h.result("one oh eight");
+    assert.ok(!h.feedback.some(value=>value?.tone==="wrong"));
+    assert.equal(h.feedback.at(-1).tone,"good");
+    h.clock(3100);
+    h.recognition.onresult({results:[{0:{transcript:"one oh eight"},length:1,isFinal:true}],speechStartedAt:2200});
+    assert.equal(h.answers[0][2],108);assert.equal(h.answers[0][3],local?1200:1400);
+  }
 });
 
 test("revised nonnumeric transcript and recognition failures clear live feedback", () => {

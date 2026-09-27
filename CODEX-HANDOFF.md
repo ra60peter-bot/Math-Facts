@@ -2,6 +2,14 @@
 
 Updated September 27, 2026. Read this before continuing work.
 
+### 108 zero time and interim Wrong flash (latest)
+
+User reports "one oh eight" recognized as108 with0.0s, and a red Wrong flash before Correct. The interim UI was judging partial numeric prefixes (one→one oh→one oh eight). Mismatching interim transcripts now remain neutral; only completed answers show Wrong. Matching interim feedback remains immediate.
+
+The local decoder's word-start0 was accepted as a response at question reveal. New `web/lib/speech-onset.ts` keeps 10ms energy summaries of PCM already going to Vosk (no audio gating/storage). Only for zero/near-zero word alignment, it searches within the first word's span for sustained acoustic activity above the estimated noise floor, rejecting a brief startup click. Normal nonzero word timestamps are unchanged. If no reliable acoustic onset is available, practice keeps the understood answer and uses first numeric transcript arrival as an explicitly labeled estimated duration; it does not fabricate a0.0s or reject the answer. This fallback can overestimate reaction time by recognition latency; it is not equivalent to a measured acoustic onset. Previous handoff claims that missing timing always causes unscored retry are superseded.
+
+67 tests pass, including forced zero alignment with delayed speech, ambiguous noise, missing/early timing fallback, and the entire108 partial sequence. Real end-to-end audio replay through MediaStream→AudioWorklet→adapter→Vosk recognized108 in all four cases: quiet delays0.7/1.7s gave onsets0.81/1.83s; background noise plus startup click gave0.86/1.86s. The fixtures include leading speech silence and audio-path latency. Real user's microphone/voice remains unverified. Temporary QA route removed before release.
+
 ### False early-speech rejection and hundred-number variants (latest)
 
 User's screenshot heard "one thirty two" for 12×11 but rejected it as speech before question reveal. That phrase already parsed as132; the timing guard introduced in the preceding change blocked it. The guard is removed. An invalid early estimated timestamp now falls back to recognition-arrival duration (logged in diagnostics), never a zero/negative time or an accusation that the student spoke early.
