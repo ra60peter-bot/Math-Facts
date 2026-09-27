@@ -2,6 +2,10 @@
 
 Updated September 26, 2026. Read this before continuing work.
 
+### Latest follow-up: on-device mode
+
+User subsequently reported both ten and forty still produce no transcript in **on-device** mode (screenshot: 10 × 4, Wrong 4.0s, No answer heard). The local answer deadline now calls stop() and allows up to800ms for a buffered result instead of immediately aborting it. Capture still ends at4s. An empty local result offers a manual retry without scoring a wrong answer; it does not silently switch to an online service. Browser-mode deadline behavior is unchanged. Tests simulate buffered forty, empty finalization, and late events; 33 tests pass. Real microphone recognition remains unverified: do not claim standalone ten/forty accuracy is solved by mocked tests.
+
 ## Project and setup
 
 - Repository: https://github.com/ra60peter-bot/Math-Facts

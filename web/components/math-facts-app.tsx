@@ -520,6 +520,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     let ready = false;
     let finalizationRequested = false;
     let emptyRestarts = 0;
+    let drainingLocalResult = false;
     const isActive = () => recognitionRef.current === recognition && !answerHandledRef.current;
     const fail = (message: string) => {
       if (!isActive()) return;
@@ -529,8 +530,22 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     };
     const finish = () => {
       if (!isActive()) return;
+      if (recognition.processLocally && !latestTranscript) {
+        fail("On-device recognition returned no words. Tap Mic to retry, or exit practice and choose Use browser recognition. No answer was scored.");
+        return;
+      }
       const parsed = parseSpokenNumber(latestTranscript, voiceMappingsRef.current);
       handleResponse(card, latestTranscript, parsed, latestTranscript ? latestResponseMs : TIMEOUT_MS);
+    };
+    const answerDeadline = () => {
+      if (!isActive()) return;
+      if (!recognition.processLocally || latestTranscript) { finish(); return; }
+      // Stop capturing at four seconds, but let the local engine return its
+      // buffered result. abort() would discard that result entirely.
+      drainingLocalResult = true;
+      setListenState("Finishing on-device recognition…");
+      timeoutRef.current = window.setTimeout(finish, 800);
+      try { recognition.stop(); } catch { finish(); }
     };
     recognition.onstart = () => {
       if (!isActive() || ready) return;
@@ -539,10 +554,10 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
       questionStartRef.current = performance.now();
       setQuestionReady(true);
       setListenState("Listening — say your answer");
-      timeoutRef.current = window.setTimeout(finish, TIMEOUT_MS);
+      timeoutRef.current = window.setTimeout(answerDeadline, TIMEOUT_MS);
     };
     recognition.onspeechstart = () => {
-      if (isActive() && ready && soundResponseMsRef.current === null) {
+      if (isActive() && ready && !drainingLocalResult && soundResponseMsRef.current === null) {
         soundResponseMsRef.current = Math.min(Math.round(performance.now() - questionStartRef.current), TIMEOUT_MS);
       }
     };
@@ -610,6 +625,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     recognition.onend = () => {
       if (!isActive()) return;
       if (!ready) fail("Microphone did not start. Tap Mic to retry.");
+      else if (drainingLocalResult) finish();
       else if (latestTranscript) finish();
       else if (emptyRestarts < 2 && performance.now() - questionStartRef.current < TIMEOUT_MS) {
         emptyRestarts += 1;

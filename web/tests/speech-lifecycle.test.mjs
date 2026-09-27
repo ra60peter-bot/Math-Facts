@@ -55,7 +55,7 @@ function harness() {
     answers, statuses, context, feedback,
     get recognition() { return recognizer; },
     clock(value) { now = value; },
-    expire() { const timer = [...timers.values()].sort((a, b) => a.at - b.at)[0]; assert.ok(timer); now = timer.at; timer.fn(); },
+    expire() { const entry = [...timers.entries()].sort((a, b) => a[1].at - b[1].at)[0]; assert.ok(entry); const [key, timer] = entry; timers.delete(key); now = timer.at; timer.fn(); },
     result(text, final = false, alternatives = []) {
       const values = [text, ...alternatives].map(transcript => ({ transcript }));
       values.isFinal = final;
@@ -68,6 +68,29 @@ test("startup delay does not consume the four-second answer window", () => {
   const h = harness(); h.clock(1800); h.recognition.onstart();
   assert.equal(h.context.questionStartRef.current, 1800);
   h.expire(); assert.equal(h.answers[0][3], 4000);
+});
+
+test("on-device deadline stops capture and allows a buffered forty result to finish", () => {
+  const h = harness(); h.context.localSpeechReadyRef.current = true; h.context.listen({ id: "local" });
+  let stops = 0; h.recognition.stop = () => { stops++; };
+  h.recognition.onstart(); h.clock(900); h.recognition.onspeechstart();
+  h.expire(); assert.equal(stops, 1); assert.equal(h.answers.length, 0);
+  h.clock(4200); h.result("forty", true);
+  assert.equal(h.answers.length, 1); assert.equal(h.answers[0][2], 40); assert.equal(h.answers[0][3], 900);
+});
+
+test("on-device empty result offers retry without scoring a wrong answer", () => {
+  const h = harness(); h.context.localSpeechReadyRef.current = true; h.context.listen({ id: "local" });
+  h.recognition.stop = () => {}; h.recognition.onstart(); h.expire(); h.expire();
+  assert.equal(h.answers.length, 0);
+  assert.match(h.statuses.at(-1), /No answer was scored/);
+  assert.equal(h.context.recognitionRef.current, null);
+});
+
+test("on-device end during finalization and late results do not score an empty attempt", () => {
+  const h = harness(); h.context.localSpeechReadyRef.current = true; h.context.listen({ id: "local" });
+  h.recognition.stop = () => {}; h.recognition.onstart(); h.expire(); h.recognition.onend();
+  h.result("ten", true); assert.equal(h.answers.length, 0);
 });
 
 test("live numeric feedback appears immediately without prematurely saving a partial answer", () => {
