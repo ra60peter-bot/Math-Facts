@@ -2,6 +2,14 @@
 
 Updated September 27, 2026. Read this before continuing work.
 
+### Owner password gate and student mode (current)
+
+Implemented the user's clarified account model: owner signs in once before a browser can list family students; every subsequent owner selection requires password; password-free students can practice and view their own history only. Owners manage only their students; admin alone manages adults. Invitations/password-reset callback sets a password, then opens Students. Admin Google sign-in remains available. See `web/PROFILE-ACCESS.md` for enforcement, migration and limits.
+
+Migration `009_profile_access.sql` applied to production: private hashed device/grant tables, RLS, service-only immutable session recording RPC. Cookies remember the family for 90 days, while eight-hour scoped grants stay in memory. Switching or reloading locks access; student selection rotates and revokes owner grants. Supabase owner tokens are not persisted in browser storage. API progress writes derive the authorized owner and cannot rewrite history. Existing accounts, students, history, speech, scheduler and canceled deletion-recalculation behavior are preserved.
+
+Validation: 118 tests, typecheck, lint and production build. Browser QA used mocked sample accounts to check picker, owner/password flow, reload lock, student own-history/details, absence of deletion/management controls and owner management. Actual DB recording/immutability test ran in a rolled-back transaction. No real invitation was sent or password changed by QA. Existing owners need one sign-in after this rollout; Google-only regular owners can choose Set or reset password. This new role-selection requirement supersedes earlier canceled per-deletion password requests below.
+
 ### Adaptive automaticity scheduler (current)
 
 The explicit user-supplied scheduler replaces the fixed FSRS queue and average-based mastery display. Read `web/AUTOMATICITY.md` for behavior, migration, validation and limitations. Shared engine is `web/lib/automaticity.ts`; all product defaults in `web/lib/automaticity-config.ts`. First-answer unassisted correctness within **1,500 ms inclusive** is the target; preserve the separate existing four-second answer window. Dynamic 7-training/3-check allocation, explicit spacing AND unrelated completions, five-attempt session cap, ten-active-prompt pool, shuffled unseen coverage, cold priming/family guards, 1/2/4/7/14/30-day ladder and four-success/seven-day verification are implemented. Reversals share interference only, not achievement.
@@ -20,7 +28,7 @@ Session complete now has a primary Repeat button beside New session and View his
 
 ### Subject mastery bar in practice setup
 
-Added a prominent purple mastery panel with a gold position marker inside Your practice session. Shows selected student, selected operation, score out of 1,000, and a 0/250/500/750/1,000 scale. Uses existing masteryScore over ALL cards for the operation (81 addition, 45 subtraction, 121 multiplication), not only selected practice facts. No scoring, speech, database, or scheduling changes. Component is web/components/mastery-progress.tsx; includes labeled accessible progressbar and light/dark colors. Temporary browser fixture checked scores 0/224/500/1000, operation/student label changes, and both themes; removed before release.
+Added a prominent purple mastery panel with a gold position marker inside Your practice session. Shows selected student, selected operation, score out of 1,000, and a 0/250/500/750/1,000 scale. Uses existing masteryScore over ALL cards for the operation (81 addition, 45 subtraction, 121 multiplication), not only selected practice facts. No scoring, speech, database, or scheduling changes. Component is web/components/mastery-progress.tsx; includes labeled accessible progressbar and light/dark colors. Temporary browser fixture checked scores 0/224/500/1000, operation/student label changes, and the light theme; removed before release.
 
 ### Student deletion password requirement canceled
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, Fragment, useCallback, useEffect, useId, useRef, useState } from "react";
+import { FormEvent, Fragment, useCallback, useContext, useEffect, useId, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import type { User } from "@supabase/supabase-js";
 import { FactCard, answerFor, makeCards } from "../lib/cards";
@@ -11,6 +11,8 @@ import { LocalSpeechStatus, prepareLocalSpeech } from "../lib/local-speech";
 import type { BrowserSpeechRecognition, BrowserSpeechRecognitionEvent, BrowserSpeechRecognitionErrorEvent } from "../lib/browser-speech";
 import { SPEECH_RESULT_GRACE_MS } from "../lib/browser-speech";
 import { addNumberHints, readNumberResult } from "../lib/speech-results";
+import { ProfileGate, ProfileContext, type AccessStudent } from "./profile-gate";
+import { accessRequest } from "../lib/access-client";
 import { SpeechTest } from "./speech-test";
 import { MasteryProgress } from "./mastery-progress";
 import { NumberSpeechRecognition, prepareNumberSpeech } from "../lib/number-speech";
@@ -105,72 +107,13 @@ function readLocalUsers() {
 }
 
 export function MathFactsApp() {
-  return <AuthGate />;
-}
-
-function AuthGate() {
-  const [user, setUser] = useState<User | null>(null);
-  const [account, setAccount] = useState<AccountProfile | null>(null);
-  const [authReady, setAuthReady] = useState(false);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [message, setMessage] = useState("");
-  const configured = hasSupabaseConfig();
-
-  useEffect(() => {
-    const client = supabaseBrowser();
-    if (!client) return;
-    client.auth.getUser().then(({ data }) => { setUser(data.user); setAuthReady(true); });
-    const { data: subscription } = client.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-      setAccount(null);
-      setAuthReady(true);
-    });
-    return () => subscription.subscription.unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    const client = supabaseBrowser();
-    if (!client || !user) { setAccount(null); return; }
-    client.from("profiles").select("id,email,display_name,role,access_status,is_admin").eq("id", user.id).single().then(({ data, error }) => {
-      if (error || !data) { setMessage("Your account profile could not be loaded. Confirm that migration 007 has been applied."); return; }
-      setAccount({
-        id: data.id,
-        email: data.email,
-        displayName: data.display_name,
-        role: data.role === "admin" || data.is_admin ? "admin" : "user",
-        status: data.access_status === "active" ? "active" : "blocked",
-      });
-    });
-  }, [user]);
-
-  async function signIn(event: FormEvent) {
-    event.preventDefault();
-    const client = supabaseBrowser();
-    if (!client) return;
-    const { error } = await client.auth.signInWithPassword({ email, password });
-    setMessage(error ? error.message : "");
-  }
-
-  async function signInWithGoogle() {
-    const client = supabaseBrowser();
-    if (!client) return;
-    const { error } = await client.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.origin } });
-    if (error) setMessage(error.message);
-  }
-
-  async function signOut() {
-    await supabaseBrowser()?.auth.signOut();
-    setUser(null);
-    setAccount(null);
-  }
-
-  if (!configured) return <LocalMode />;
-  if (!authReady) return <main className="main"><div className="setup"><p className="muted">Loading account…</p></div></main>;
-  if (user && !account) return <main className="main"><div className="setup"><p className="muted">Loading account profile…</p>{message && <p className="notice">{message}</p>}</div></main>;
-  if (user && account?.status !== "active") return <main className="main"><div className="setup"><h1>Invitation required</h1><p className="notice">This email has not been invited to Math Facts. Ask the administrator to invite {user.email}.</p><button className="button secondary" onClick={() => void signOut()}>Sign out</button></div></main>;
-  if (user && account) return <PracticeApp cloudUser={user} account={account} />;
-  return <main className="main"><div className="setup"><h1>Sign in</h1><p className="muted">Math Facts is invite-only. Use the email address from your invitation and the password you selected.</p><form className="form-row" onSubmit={signIn}><label>Email<input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></label><label>Password<input type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} /></label><button className="button primary">Sign in</button></form><div className="auth-divider"><span>or</span></div><button className="button google" onClick={() => void signInWithGoogle()}>Continue with Google</button>{message && <p className="notice">{message}</p>}</div></main>;
+  if (!hasSupabaseConfig()) return <LocalMode />;
+  return <ProfileGate>{session => <PracticeApp
+    key={`${session.profile.id}:${session.student?.id ?? "owner"}`}
+    cloudUser={{id:session.profile.id,email:session.profile.email} as User}
+    account={session.profile} student={session.student}
+    initialView={session.onboarding ? "students" : "practice"}
+  />}</ProfileGate>;
 }
 
 function LocalMode() {
@@ -226,6 +169,8 @@ function LocalMode() {
 }
 
 type PracticeAppProps = {
+  student?: AccessStudent;
+  initialView?: View;
   cloudUser: User | null;
   account?: AccountProfile | null;
   isAdmin?: boolean;
@@ -237,15 +182,15 @@ type PracticeAppProps = {
   onSelectLocalUser?: (userId: string) => void;
 };
 
-function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, localUsers = [], localUserId, localUserName, onAddLocalUser, onDeleteLocalUser, onSelectLocalUser }: PracticeAppProps) {
-  const isAdmin = account?.role === "admin" || localAdmin;
-  const [cloudStudents, setCloudStudents] = useState<StudentProfile[]>([]);
-  const [studentsLoading, setStudentsLoading] = useState(Boolean(cloudUser));
-  const [selectedStudentId, setSelectedStudentId] = useState("");
+function PracticeApp({ student, initialView = "practice", cloudUser, account = null, isAdmin: localAdmin = false, localUsers = [], localUserId, localUserName, onAddLocalUser, onDeleteLocalUser, onSelectLocalUser }: PracticeAppProps) {
+  const isAdmin = !student && (account?.role === "admin" || localAdmin);
+  const [cloudStudents, setCloudStudents] = useState<StudentProfile[]>(student ? [student] : []);
+  const [studentsLoading, setStudentsLoading] = useState(Boolean(cloudUser) && !student);
+  const [selectedStudentId, setSelectedStudentId] = useState(student?.id ?? "");
   const activeStudent = cloudStudents.find((student) => student.id === selectedStudentId) ?? null;
   const progressOwnerId = cloudUser ? selectedStudentId : (localUserId ?? DEFAULT_LOCAL_USER.id);
   const progressAccountId = cloudUser ? (activeStudent?.ownerId ?? cloudUser.id) : "";
-  const [view, setView] = useState<View>("practice");
+  const [view, setView] = useState<View>(initialView);
   const [historyLocalUserId, setHistoryLocalUserId] = useState(localUserId ?? "local-default");
   const [phase, setPhase] = useState<Phase>("setup");
   const [operation, setOperation] = useState<Operation>("add");
@@ -310,6 +255,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
   const [questionReady, setQuestionReady] = useState(false);
 
   const loadStudents = useCallback(async () => {
+    if (student) { setCloudStudents([student]); setSelectedStudentId(student.id); setStudentsLoading(false); return; }
     if (!cloudUser) return;
     setStudentsLoading(true);
     try {
@@ -327,7 +273,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     } finally {
       setStudentsLoading(false);
     }
-  }, [cloudUser]);
+  }, [cloudUser, student]);
 
   useEffect(() => { void loadStudents(); }, [loadStudents]);
 
@@ -819,7 +765,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
   const selectedCards = allCards.filter(card => selectedFacts[operation].has(card.id));
   const summary = automaticity ? getProgressSummary(automaticity, selectedCards) : { total: selectedCards.length, assessed: 0, unassessed: selectedCards.length, training: 0, verifying: 0, verified: 0, due: 0, everVerified: 0, coldChecks: 0, coldCorrectPercent: null, coldAutomaticPercent: null, score: 0 };
   const currentSession = phase === "results" ? sessions[0] : null;
-  const accountName = account?.email ?? localUserName;
+  const accountName = student?.name ?? account?.email ?? localUserName;
 
   if (view === "users" && isAdmin && cloudUser) {
     return <AppFrame view={view} onNavigate={setView} onExit={() => setPhase("setup")} isAdmin accountName={accountName}>
@@ -827,7 +773,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     </AppFrame>;
   }
 
-  if (view === "students") {
+  if (view === "students" && !student) {
     return <AppFrame view={view} onNavigate={setView} onExit={() => setPhase("setup")} isAdmin={isAdmin} accountName={accountName}>
       {cloudUser
         ? <StudentManagement students={cloudStudents} activeStudentId={selectedStudentId} accountId={cloudUser.id} onSelectStudent={selectStudent} onChanged={loadStudents} />
@@ -846,7 +792,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     const historySessions = cloudUser ? sessions : readProgress(historyLocalUserId).sessions;
     return <AppFrame view={view} onNavigate={setView} onExit={() => setView("practice")} isAdmin={isAdmin} accountName={accountName}>
       <div className="topbar"><div><h1>History</h1><p className="muted">{cloudUser ? `Showing sessions, including early exits, for ${activeStudent?.name ?? "the selected student"}.` : `Showing sessions, including early exits, for ${historyStudent?.name ?? "this learner"} on this device.`}</p></div></div>
-      <div className="form-row">
+      {!student && <div className="form-row">
         <label>Student
           {cloudUser
             ? <select value={selectedStudentId} onChange={(event) => selectStudent(event.target.value)} disabled={studentsLoading || cloudStudents.length === 0}>
@@ -857,8 +803,8 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
                 {localUsers.map((student) => <option key={student.id} value={student.id}>{student.name}</option>)}
               </select>}
         </label>
-      </div>
-      <SessionHistory key={cloudUser ? selectedStudentId : historyLocalUserId} sessions={historySessions} detailedDates onDelete={async (sessionId) => {
+      </div>}
+      <SessionHistory key={cloudUser ? selectedStudentId : historyLocalUserId} sessions={historySessions} detailedDates onDelete={student ? undefined : async (sessionId) => {
         const ownerId = cloudUser ? selectedStudentId : historyLocalUserId;
         if (cloudUser) {
           if (!navigator.onLine) throw new Error("Connect to the internet to delete a saved session.");
@@ -973,28 +919,28 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
             {localSpeechStatus === "browser" && !numberSpeechActive && <button className="button secondary" onClick={() => void prepareSpeech()}>Try browser’s on-device pack</button>}
             {localSpeechStatus === "ready" && <button className="button secondary" onClick={() => { localSpeechReadyRef.current = false; setLocalSpeechStatus("browser"); }}>Use browser recognition</button>}
           </div>
-          <SpeechTest key={numberSpeechActive ? "numbers" : localSpeechStatus === "ready" ? "local" : "browser"} local={localSpeechStatus === "ready"} numbers={numberSpeechActive} />
+          {!student && <SpeechTest key={numberSpeechActive ? "numbers" : localSpeechStatus === "ready" ? "local" : "browser"} local={localSpeechStatus === "ready"} numbers={numberSpeechActive} />}
         </section>}
         {syncMessage && <p className="notice" role="status">{syncMessage}{!progressReady && <button className="button secondary" onClick={() => window.location.reload()}>Retry loading progress</button>}</p>}
         <section className="session-settings" aria-labelledby="session-settings-title">
         <h2 id="session-settings-title">Your practice session</h2>
         {automaticity?.session && automaticity.session.status !== "ended" && <p className="notice">An unfinished {operationLabel(automaticity.session.operation).toLowerCase()} session has {automaticity.session.gradedCount} completed answers. Resume keeps its original facts, question count, and attempt limits. <button className="button secondary" onClick={() => finishSession("Unfinished session saved. Choose New session to change its configuration.")}>End saved session</button></p>}
         <div className="form-row">
-          {cloudUser && <label>Student<select value={selectedStudentId} onChange={(event) => selectStudent(event.target.value)}>{cloudStudents.map((student) => <option key={student.id} value={student.id}>{student.name}{isAdmin && student.ownerEmail ? ` — ${student.ownerEmail}` : ""}</option>)}</select></label>}
+          {cloudUser && !student && <label>Student<select value={selectedStudentId} onChange={(event) => selectStudent(event.target.value)}>{cloudStudents.map((student) => <option key={student.id} value={student.id}>{student.name}{isAdmin && student.ownerEmail ? ` — ${student.ownerEmail}` : ""}</option>)}</select></label>}
           <div className="operation-field"><span>Operation</span><div className="operation-toggle"><button aria-pressed={operation === "add"} onClick={() => setOperation("add")}>Addition</button><button aria-pressed={operation === "sub"} onClick={() => setOperation("sub")}>Subtraction</button><button aria-pressed={operation === "mul"} onClick={() => setOperation("mul")}>Multiplication</button></div></div>
           <label>Questions<select value={questionCount} onChange={(event) => setQuestionCount(Number(event.target.value))}>{QUESTION_COUNT_OPTIONS.map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
           <button className="button primary" onClick={startPractice} disabled={!speechSupported || selectedCount === 0 || !progressReady}>{automaticity?.session && automaticity.session.status !== "ended" ? "Resume session" : "Start practice"}</button>
         </div>
         <MasteryProgress score={summary.score} subject={operationLabel(operation)} studentName={activeStudent?.name ?? localUserName ?? "Local learner"} factCount={selectedCards.length} />
         </section>
-        <div className="automaticity-summary" aria-label="Automaticity progress">
+        {!student && <div className="automaticity-summary" aria-label="Automaticity progress">
           <p><strong>{summary.unassessed}</strong> Not assessed · <strong>{summary.training}</strong> Building speed · <strong>{summary.verifying}</strong> Fast in practice; verifying · <strong>{summary.verified}</strong> Verified automatic</p>
           <p><strong>{summary.due}</strong> checks due · Target: correct, unassisted, within 1.5 seconds on later unprimed checks.</p>
           <p>Cold checks correct: <strong>{summary.coldCorrectPercent === null ? "No checks yet" : summary.coldCorrectPercent + "%"}</strong> · Correct and within target: <strong>{summary.coldAutomaticPercent === null ? "No checks yet" : summary.coldAutomaticPercent + "%"}</strong> ({summary.coldChecks} checks)</p>
           {summary.everVerified > summary.verified && <p>Previously verified; needs recheck: {summary.everVerified - summary.verified} facts.</p>}
           <details><summary>Individual fact status</summary><div className="fact-status-list">{selectedCards.map(card => { const fact = automaticity?.facts[card.id]; return <p key={card.id}><strong>{card.a} {operationSymbol(operation)} {card.b}</strong> — {fact?.everVerifiedAutomatic && fact.stage !== "MAINTENANCE" ? "Previously verified; needs recheck" : stageLabels[fact?.stage ?? "UNASSESSED"]}{fact?.dueAt ? ` · Check ${new Date(fact.dueAt).toLocaleString()}` : ""}</p>; })}</div></details>
-        </div>
-        <FactGrid operation={operation} selected={selectedFacts[operation]} onChange={(next) => setSelectedFacts((current) => ({ ...current, [operation]: next }))} />
+        </div>}
+        {student ? <details><summary>Choose specific facts (optional)</summary><FactGrid operation={operation} selected={selectedFacts[operation]} onChange={(next) => setSelectedFacts((current) => ({ ...current, [operation]: next }))} /></details> : <FactGrid operation={operation} selected={selectedFacts[operation]} onChange={(next) => setSelectedFacts((current) => ({ ...current, [operation]: next }))} />}
         <div className="stats">
           <Stat label="Facts selected" value={`${selectedCount}/${allCards.length}`} />
           <Stat label="Verified automatic" value={`${summary.verified}/${summary.total}`} />
@@ -1006,14 +952,16 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
 }
 
 function AppFrame({ children, view, onNavigate, onExit, isAdmin = false, accountName }: { children: React.ReactNode; view: View; onNavigate: (view: View) => void; onExit: () => void; isAdmin?: boolean; accountName?: string }) {
+  const profileAccess = useContext(ProfileContext);
   async function signOut() {
+    if (profileAccess.switchPerson) { profileAccess.switchPerson(); return; }
     const supabase = supabaseBrowser();
     if (!supabase) return;
     await supabase.auth.signOut();
     window.location.reload();
   }
 
-  return <div className="app-shell"><aside className="sidebar"><div className="brand">Math <span>Facts</span></div><nav className="nav"><button aria-current={view === "practice" ? "page" : undefined} onClick={() => { onExit(); onNavigate("practice"); }}>Practice</button><button aria-current={view === "history" ? "page" : undefined} onClick={() => onNavigate("history")}>History</button><button aria-current={view === "students" ? "page" : undefined} onClick={() => onNavigate("students")}>Students</button>{isAdmin && <button aria-current={view === "users" ? "page" : undefined} onClick={() => onNavigate("users")}>Admin</button>}</nav><div className="account">{accountName && <><strong>{accountName}</strong><br /></>}Voice-first practice<br />Addition, subtraction, and multiplication{hasSupabaseConfig() && <><br /><button className="button secondary" onClick={() => void signOut()}>Sign out</button></>}</div></aside><main className="main">{children}</main></div>;
+  return <div className="app-shell"><aside className="sidebar"><div className="brand">Math <span>Facts</span></div><nav className="nav"><button aria-current={view === "practice" ? "page" : undefined} onClick={() => { onExit(); onNavigate("practice"); }}>Practice</button><button aria-current={view === "history" ? "page" : undefined} onClick={() => onNavigate("history")}>History</button>{!profileAccess.student && <button aria-current={view === "students" ? "page" : undefined} onClick={() => onNavigate("students")}>Students</button>}{isAdmin && <button aria-current={view === "users" ? "page" : undefined} onClick={() => onNavigate("users")}>Admin</button>}</nav><div className="account">{accountName && <><strong>{accountName}</strong><br /></>}Voice-first practice<br />Addition, subtraction, and multiplication{hasSupabaseConfig() && <><br /><button className="button secondary" onClick={() => void signOut()}>{profileAccess.switchPerson ? "Switch person" : "Sign out"}</button></>}</div></aside><main className="main">{children}</main></div>;
 }
 
 function Stat({ label, value }: { label: string; value: string }) { return <div className="stat"><strong>{value}</strong><span className="muted">{label}</span></div>; }
@@ -1174,16 +1122,7 @@ function SessionHistory({ sessions, detailedDates = false, onDelete }: { session
   </>;
 }
 async function accountRequest(path: string, init: RequestInit = {}) {
-  const client = supabaseBrowser();
-  if (!client) throw new Error("Supabase is not configured.");
-  const { data } = await client.auth.getSession();
-  const response = await fetch(path, {
-    ...init,
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session?.access_token ?? ""}`, ...init.headers },
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error ?? "The request could not be completed.");
-  return payload;
+  return accessRequest(path, init);
 }
 
 function UserManagement({ currentUserId }: { currentUserId: string }) {

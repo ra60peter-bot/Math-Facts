@@ -13,9 +13,6 @@ export async function POST(request: NextRequest) {
     .select("id,access_status")
     .eq("email", email)
     .maybeSingle();
-  if (existingProfile?.access_status === "active") {
-    return NextResponse.json({ error: "This email already has access." }, { status: 400 });
-  }
 
   const { error: invitationError } = await auth.service.from("account_invitations").upsert({
     email,
@@ -30,7 +27,9 @@ export async function POST(request: NextRequest) {
       .update({ access_status: "active", invited_by: auth.user.id })
       .eq("id", existingProfile.id);
     if (activationError) return NextResponse.json({ error: activationError.message }, { status: 400 });
-    return NextResponse.json({ ok: true, activatedExistingGoogleAccount: true });
+    const {error:emailError}=await auth.service.auth.resetPasswordForEmail(email,{redirectTo:`${request.nextUrl.origin}/auth/callback`});
+    if(emailError)return NextResponse.json({error:emailError.message},{status:400});
+    return NextResponse.json({ ok: true, activatedExistingGoogleAccount: false });
   }
 
   const { error } = await auth.service.auth.admin.inviteUserByEmail(email, {

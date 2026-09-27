@@ -1,12 +1,14 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CardState, Operation } from "./learning";
 import type { AutomaticProgress, AttemptEvent } from "./automaticity";
+import {accessRequest,getAccessToken} from "./access-client";
 
 export type CloudAttempt = { id: string; fact: string; operation: Operation; correct: boolean; answerCorrect: boolean; responseMs: number; heard: string; at: string; audit?: AttemptEvent };
 export type CloudSession = { id: string; operation: Operation; startedAt: string; endedAt: string; attempts: CloudAttempt[] };
 export type CloudProgress = { states: Record<string, CardState>; sessions: CloudSession[]; automaticity?: AutomaticProgress | null };
 
 const writes = new Map<string, Promise<unknown>>();
+export async function flushProgressWrites() { await Promise.all([...writes.values()]); }
 export function queueProgressWrite<T>(studentId: string, action: () => Promise<T>): Promise<T> {
   const next = (writes.get(studentId) ?? Promise.resolve()).catch(() => undefined).then(action);
   writes.set(studentId, next);
@@ -19,6 +21,7 @@ function uploadedSessions(studentId: string): Set<string> {
 }
 
 export function rememberUploadedSessions(studentId: string, ids: string[]) {
+  if(typeof localStorage === "undefined")return;
   const uploaded = uploadedSessions(studentId);
   ids.forEach((id) => uploaded.add(id));
   localStorage.setItem(`math-facts-uploaded:${studentId}`, JSON.stringify([...uploaded]));
@@ -30,12 +33,14 @@ export function mergePendingSessions(studentId: string, local: CloudSession[], c
 }
 
 export async function loadVoiceMappings(client: SupabaseClient, studentId: string) {
+  if(getAccessToken())return (await accessRequest(`/api/progress?studentId=${encodeURIComponent(studentId)}&mappings=1`)).mappings;
   const { data, error } = await client.from("voice_mappings").select("heard_text,answer").eq("student_id", studentId);
   if (error) return {};
   return Object.fromEntries((data ?? []).map((row) => [row.heard_text, row.answer])) as Record<string, number>;
 }
 
 export async function saveVoiceMapping(client: SupabaseClient, studentId: string, accountId: string, heardText: string, answer: number) {
+  if(getAccessToken())return; // Student mode cannot edit recognition mappings.
   const { error } = await client.from("voice_mappings").upsert(
     { student_id: studentId, user_id: accountId, heard_text: heardText, answer, updated_at: new Date().toISOString() },
     { onConflict: "student_id,heard_text" },
@@ -44,6 +49,11 @@ export async function saveVoiceMapping(client: SupabaseClient, studentId: string
 }
 
 export async function loadCloudProgress(client: SupabaseClient, studentId: string): Promise<CloudProgress | null> {
+  if(getAccessToken()) {
+    const progress=await accessRequest(`/api/progress?studentId=${encodeURIComponent(studentId)}`);
+    rememberUploadedSessions(studentId,progress.sessions.map((s:CloudSession)=>s.id));
+    return progress;
+  }
   const [{ data: stateRows, error: stateError }, { data: sessionRows, error: sessionError }, { data: attemptRows, error: attemptError }, { data: student, error: schedulerError }] = await Promise.all([
     client.from("card_states").select("*").eq("student_id", studentId),
     client.from("practice_sessions").select("*").eq("student_id", studentId).order("ended_at", { ascending: false }),
@@ -84,10 +94,16 @@ export async function loadCloudProgress(client: SupabaseClient, studentId: strin
 }
 
 export function syncCloudProgress(client: SupabaseClient, studentId: string, accountId: string, progress: CloudProgress) {
-  return queueProgressWrite(studentId, () => uploadProgress(client, studentId, accountId, progress));
+  const token=getAccessToken();
+  return queueProgressWrite(studentId, async () => {
+    if(!token)return uploadProgress(client,studentId,accountId,progress);
+    const pending=progress.sessions.filter(session=>!uploadedSessions(studentId).has(session.id));
+    await accessRequest("/api/progress",{method:"POST",headers:{"X-Math-Access":token},body:JSON.stringify({studentId,progress:{...progress,sessions:pending}})});
+    rememberUploadedSessions(studentId,pending.map(s=>s.id));
+  });
 }
 
-async function uploadProgress(client: SupabaseClient, studentId: string, accountId: string, progress: CloudProgress) {
+export async function uploadProgress(client: SupabaseClient, studentId: string, accountId: string, progress: CloudProgress) {
   // Completed sessions are immutable. Do not recreate deleted history from old caches.
   const uploaded = uploadedSessions(studentId);
   const pendingSessions = progress.sessions.filter((session) => !uploaded.has(session.id));

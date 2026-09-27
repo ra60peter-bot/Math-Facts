@@ -9,7 +9,7 @@ function compile(file, context) {
   const exports = {};
   vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(root, file), "utf8"), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
-  }).outputText, { exports, ...context });
+  }).outputText, { exports, require:()=>({getAccessToken:()=>""}), ...context });
   return exports;
 }
 function route({ role = "user", owner = "owner", authenticated = true, fail = false } = {}) {

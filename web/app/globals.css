@@ -227,3 +227,16 @@ input, select { min-width: 145px; background: var(--surface); border: 1px solid 
   .operation-toggle button { padding-inline: 10px; font-size: 13px; }
   .fact-selector-heading { align-items: flex-start; flex-direction: column; }
 }
+:root { --identity-accent: #7950bd; }
+.identity-page { min-height: 100dvh; padding: clamp(24px, 5vw, 72px); display: grid; place-items: start center; }
+.identity-panel { width: min(100%, 800px); }
+.identity-panel h1 { margin-bottom: 16px; }
+.identity-panel h2 { margin-top: 32px; }
+.student-picker { display: grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap: 16px; margin: 16px 0 32px; }
+.identity-card { width: 100%; display: flex; align-items: center; gap: 18px; text-align: left; border: 2px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 18px; padding: 24px; cursor: pointer; }
+.identity-card:hover, .identity-card:focus-visible { border-color: #ba93ef; outline-offset: 4px; }
+.identity-card strong { display: block; font-size: 1.15rem; overflow-wrap: anywhere; }
+.identity-card small { display: block; color: var(--muted); margin-top: 6px; }
+.identity-icon { flex: 0 0 48px; height: 48px; border-radius: 50%; display: grid; place-items: center; background: #7148ad; color: white; font-size: 1.4rem; font-weight: 700; }
+.owner-card { margin-top: 28px; border-left: 6px solid #b998e5; }
+.identity-form { display: grid; gap: 20px; max-width: 440px; margin: 24px 0; }
