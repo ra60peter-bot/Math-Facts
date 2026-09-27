@@ -6,8 +6,9 @@ import { SPEECH_RESULT_GRACE_MS } from "../lib/browser-speech";
 import { TIMEOUT_MS } from "../lib/learning";
 import { addNumberHints, readNumberResult } from "../lib/speech-results";
 import { parseSpokenNumber } from "../lib/number-parser";
+import { NumberSpeechRecognition } from "../lib/number-speech";
 
-export function SpeechTest({ local }: { local: boolean }) {
+export function SpeechTest({ local, numbers = false }: { local: boolean; numbers?: boolean }) {
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState("Choose one number, then start the test.");
   const [word, setWord] = useState("two");
@@ -18,7 +19,7 @@ export function SpeechTest({ local }: { local: boolean }) {
 
   const start = () => {
     stopRef.current();
-    const Recognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
+    const Recognition = numbers ? NumberSpeechRecognition : window.SpeechRecognition ?? window.webkitSpeechRecognition;
     if (!Recognition) { setStatus("Speech recognition is unavailable in this browser."); return; }
     const recognition: BrowserSpeechRecognition = new Recognition();
     recognition.lang = "en-US";
@@ -34,7 +35,7 @@ export function SpeechTest({ local }: { local: boolean }) {
     let drain: number | undefined;
     const began = performance.now();
     setHeard("");
-    setReport([`Speech test v3 · one answer · ${local ? "on-device" : "browser"} · number hints: ${hints}`, navigator.userAgent]);
+    setReport([`Speech test v4 · one answer · ${numbers ? "number engine (Vosk)" : local ? "on-device" : "browser"} · number hints: ${numbers ? "number vocabulary" : hints}`, navigator.userAgent]);
     const log = (message: string) => {
       if (active) setReport((lines) => [...lines.slice(-119), `${((performance.now() - began) / 1000).toFixed(3)}s ${message}`]);
     };

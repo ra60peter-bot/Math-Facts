@@ -10,6 +10,7 @@ import type { BrowserSpeechRecognition, BrowserSpeechRecognitionEvent, BrowserSp
 import { SPEECH_RESULT_GRACE_MS } from "../lib/browser-speech";
 import { addNumberHints, readNumberResult } from "../lib/speech-results";
 import { SpeechTest } from "./speech-test";
+import { NumberSpeechRecognition, prepareNumberSpeech } from "../lib/number-speech";
 import { HistorySort, historyResult, sortHistoryAttempts } from "../lib/history-sort";
 import { CardState, Grade, Operation, TIMEOUT_MS, defaultState, gradeResponse, masteryScore } from "../lib/learning";
 import { normalizeSpokenPhrase, parseSpokenNumber } from "../lib/number-parser";
@@ -262,13 +263,33 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
   const [speechSupported, setSpeechSupported] = useState(true);
   const [localSpeechStatus, setLocalSpeechStatus] = useState<LocalSpeechStatus | "browser">("browser");
   const [localSpeechError, setLocalSpeechError] = useState("");
+  const [numberSpeechStatus, setNumberSpeechStatus] = useState<"idle" | "loading" | "ready" | "failed">("idle");
+  const [numberSpeechActive, setNumberSpeechActive] = useState(false);
+  const [numberSpeechError, setNumberSpeechError] = useState("");
+  const numberSpeechActiveRef = useRef(false);
   const localSpeechReadyRef = useRef(false);
+  const enableNumberSpeech = async () => {
+    setNumberSpeechStatus("loading");
+    setNumberSpeechError("");
+    try {
+      await prepareNumberSpeech();
+      numberSpeechActiveRef.current = true;
+      localSpeechReadyRef.current = false;
+      setNumberSpeechActive(true);
+      setNumberSpeechStatus("ready");
+      setLocalSpeechStatus("browser");
+    } catch (error) {
+      setNumberSpeechStatus("failed");
+      setNumberSpeechError(error instanceof Error ? error.message : "Could not prepare number recognition.");
+    }
+  };
   const localSpeechPreparationRef = useRef<Promise<boolean> | null>(null);
   const prepareSpeech = useCallback(() => {
     if (localSpeechPreparationRef.current) return localSpeechPreparationRef.current;
     const Recognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
     const pending = prepareLocalSpeech(Recognition, setLocalSpeechStatus, setLocalSpeechError).then((ready) => {
       localSpeechReadyRef.current = ready;
+      if (ready) { numberSpeechActiveRef.current = false; setNumberSpeechActive(false); }
       return ready;
     }).finally(() => { localSpeechPreparationRef.current = null; });
     localSpeechPreparationRef.current = pending;
@@ -478,7 +499,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
   }, [advance, scheduleRetry, stopListening]);
 
   const startListening = useCallback((card: FactCard) => {
-    const Recognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
+    const Recognition = numberSpeechActiveRef.current ? NumberSpeechRecognition : window.SpeechRecognition ?? window.webkitSpeechRecognition;
     if (!Recognition) { setSpeechSupported(false); setListenState("Speech recognition is unavailable in this browser."); return; }
     stopListening();
     answerHandledRef.current = false;
@@ -489,12 +510,12 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     setListenState("Starting microphone…");
     setSpeechReport("");
     const recognitionStartedAt = performance.now();
-    const trace = [`Practice speech v3 · ${localSpeechReadyRef.current ? "on-device" : "browser"}`, navigator.userAgent];
+    const trace = [`Practice speech v4 · ${numberSpeechActiveRef.current ? "number engine (Vosk)" : localSpeechReadyRef.current ? "on-device" : "browser"}`, navigator.userAgent];
     const log = (message: string) => {
       if (trace.length >= 100) trace.splice(2, 1);
       trace.push(`${((performance.now() - recognitionStartedAt) / 1000).toFixed(3)}s ${message}`);
     };
-    const recognition = new Recognition();
+    const recognition: BrowserSpeechRecognition = new Recognition();
     if (localSpeechReadyRef.current) recognition.processLocally = true;
     recognition.lang = "en-US";
     // Keep the recognizer open across short speech/silence boundaries. We own
@@ -522,7 +543,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     const finish = () => {
       if (!isActive()) return;
       if (!latestTranscript) {
-        const mode = recognition.processLocally ? "On-device" : "Browser";
+        const mode = numberSpeechActiveRef.current ? "Number" : recognition.processLocally ? "On-device" : "Browser";
         const detail = soundResponseMsRef.current !== null
           ? "Speech was detected, but no words were returned."
           : soundDetected ? "Sound was detected, but no speech was recognized."
@@ -633,6 +654,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
         "service-not-allowed": "Speech recognition is blocked by this browser. Check its permissions.",
         "audio-capture": "No microphone found. Connect one, then tap Mic to retry.",
         "network": "Speech service connection failed. Check your connection, then tap Mic.",
+        "number-decoder": "Number recognition stopped. Tap Mic to retry, or switch recognition mode in practice setup.",
       };
       fail(messages[event.error] ?? "Speech recognition stopped. Tap Mic to retry.");
     };
@@ -877,23 +899,28 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
         {!speechSupported && <p className="notice">This app requires speech recognition. Use the latest Chrome or Edge on a laptop or desktop, then allow microphone access.</p>}
         {speechSupported && <section className="voice-settings" aria-labelledby="voice-settings-title">
           <div className="voice-settings-copy">
-            <div className="voice-settings-heading"><h2 id="voice-settings-title">Voice recognition</h2><span className="voice-mode">{localSpeechStatus === "ready" ? "On-device active" : "Browser active"}</span></div>
+            <div className="voice-settings-heading"><h2 id="voice-settings-title">Voice recognition</h2><span className="voice-mode">{numberSpeechActive ? "Number recognition active" : localSpeechStatus === "ready" ? "On-device active" : "Browser active"}</span></div>
             <div role="status">
-              <p>{localSpeechStatus === "browser" ? "Using your browser to hear answers. You can also try an English speech pack that runs on this device." :
+              <p>{numberSpeechActive ? "Using a local engine with a number-focused vocabulary. Your voice stays on this device." :
+                numberSpeechStatus === "loading" ? "Preparing number recognition (about 40 MB on the first download)…" :
+                localSpeechStatus === "browser" ? "If the browser misses short answers, enable number recognition. It uses a separate local speech engine and a one-time download of about 40 MB." :
                 localSpeechStatus === "ready" ? "The English speech pack is ready. Answers are recognized on this device." :
                 localSpeechStatus === "checking" ? "Checking whether this browser supports on-device recognition…" :
                 localSpeechStatus === "downloading" ? "Downloading the English speech pack. You can practice while it downloads." :
                 localSpeechStatus === "unsupported" ? "This browser does not support the on-device English speech pack. Browser recognition is still available." :
                 "The speech pack could not be prepared. You can still practice with browser recognition."}</p>
               {localSpeechStatus === "failed" && localSpeechError && <p className="voice-error">{localSpeechError}</p>}
+              {numberSpeechError && <p className="voice-error">{numberSpeechError}</p>}
             </div>
           </div>
           <div className="voice-settings-action">
+            {!numberSpeechActive && <button className="button primary" disabled={numberSpeechStatus === "loading"} onClick={() => void enableNumberSpeech()}>{numberSpeechStatus === "loading" ? "Preparing number recognition…" : numberSpeechStatus === "ready" ? "Use number recognition" : "Enable number recognition"}</button>}
+            {numberSpeechActive && <button className="button secondary" onClick={() => { numberSpeechActiveRef.current = false; setNumberSpeechActive(false); }}>Use browser recognition</button>}
             {localSpeechStatus === "failed" && <button className="button primary" onClick={() => void prepareSpeech()}>Retry speech download</button>}
-            {localSpeechStatus === "browser" && <><button className="button primary" onClick={() => void prepareSpeech()}>Try on-device recognition</button><span>Optional · availability varies by browser</span></>}
+            {localSpeechStatus === "browser" && !numberSpeechActive && <button className="button secondary" onClick={() => void prepareSpeech()}>Try browser’s on-device pack</button>}
             {localSpeechStatus === "ready" && <button className="button secondary" onClick={() => { localSpeechReadyRef.current = false; setLocalSpeechStatus("browser"); }}>Use browser recognition</button>}
           </div>
-          <SpeechTest key={localSpeechStatus === "ready" ? "local" : "browser"} local={localSpeechStatus === "ready"} />
+          <SpeechTest key={numberSpeechActive ? "numbers" : localSpeechStatus === "ready" ? "local" : "browser"} local={localSpeechStatus === "ready"} numbers={numberSpeechActive} />
         </section>}
         <section className="session-settings" aria-labelledby="session-settings-title">
         <h2 id="session-settings-title">Your practice session</h2>

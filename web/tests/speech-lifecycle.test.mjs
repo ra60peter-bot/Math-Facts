@@ -39,6 +39,7 @@ function harness() {
     answerHandledRef: { current: true }, timeoutRef: { current: null },
     recognitionRef: { current: null }, voiceMappingsRef: { current: {} },
     localSpeechReadyRef: { current: false }, setLocalSpeechStatus() {},
+    numberSpeechActiveRef: { current: false },
     setSpeechSupported() {}, setQuestionReady(value) { questionReady.push(value); }, setHeard() {}, setResult(value) { feedback.push(value); },
     answerFor: () => 28,
     setListenState: value => statuses.push(value),

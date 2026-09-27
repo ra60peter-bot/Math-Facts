@@ -4,3 +4,5 @@ node_modules
 .env.local
 .env*.local
 !.env.example
+.speech-model-cache/
+public/models/*.tar.gz

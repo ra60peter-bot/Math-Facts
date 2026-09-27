@@ -16,7 +16,7 @@ function underHundredToWords(value: number) {
   return units === 0 ? tensWords[tens] : `${tensWords[tens]} ${ones[units]}`;
 }
 
-function numberToPhrases(value: number) {
+export function numberToPhrases(value: number) {
   if (value < 0 || value > 225) return [];
   if (value < 100) {
     return value === 0 ? [underHundredToWords(value), "oh"] : [underHundredToWords(value)];

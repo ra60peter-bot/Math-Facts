@@ -1,6 +1,18 @@
 # Math Facts: desktop handoff
 
-Updated September 26, 2026. Read this before continuing work.
+Updated September 27, 2026. Read this before continuing work.
+
+### Independent number speech engine (latest)
+
+The user's isolated-answer v3 trace detects sound/speech at 1.280s but returns NO transcript before capture stops at 4.386s or the processing allowance ends at 7.385s. The parser never receives words in this trace. This does not identify an acoustic cause inside Chrome. Further parser aliases cannot repair missing transcripts.
+
+Practice now offers **Enable number recognition**, a separate Vosk WASM engine with direct AudioWorklet microphone capture. This is distinct from Chrome's native on-device pack. Download is opt-in (~42 MB), microphone audio stays on-device, and the grammar includes all numbers 0–225 (including wrong answers), answer introductions, and an unknown-word path. Browser recognition remains available and unchanged. The model is cached by vosk-browser; mode selection currently lasts for the page lifetime.
+
+`web/lib/number-speech.ts` adapts the local decoder to the existing practice/test lifecycle. Every captured sample is decoded, with noise suppression disabled; an energy threshold is used only for timing, never to discard audio. Stop flushes the final worklet buffer before asking for a final transcript. Interim feedback remains immediate; only final answers or the deadline commit scores. Existing four-second capture and three-second processing allowance remain. No changes to spaced repetition or database.
+
+`npm run dev` and `npm run build` prepare the model using `web/scripts/prepare-number-model.mjs`: download the official English small 0.15 ZIP, verify its pinned SHA-256, repack for vosk-browser, and serve the generated archive under `/models/english-numbers-0.15.tar.gz`. Archive/cache are ignored by Git. Apache license and attribution are in `web/public/models/`. Build machines need network access to the model host on an uncached build. Next and eslint-config-next are pinned to 16.3.5.
+
+Actual browser/WASM acoustic verification used Windows SAPI-generated WAV files in two voices: two, four, six, eight, ten, forty, twenty-eight, and fifty-one. All 16 decoded correctly; hello and good morning decoded as [unk]. Decoder processing for complete files was 257–429ms, NOT measured live microphone latency. Temporary QA route was removed. Adapter regression tests also cover quiet samples, buffered audio on stop, wrong answers, cancellation, and pending microphone permission. User-voice and Safari microphone accuracy remain unverified; do not claim this has been confirmed on the user's hardware.
 
 ### Real browser trace follow-up: delayed transcript delivery
 
