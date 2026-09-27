@@ -5,7 +5,10 @@ import type { User } from "@supabase/supabase-js";
 import { FactCard, answerFor, buildQueue, insertRetry, makeCards } from "../lib/cards";
 import { loadCloudProgress, loadVoiceMappings, saveVoiceMapping, syncCloudProgress, queueProgressWrite, rememberUploadedSessions } from "../lib/cloud-progress";
 import { reviewCardState } from "../lib/fsrs-scheduler";
-import { LocalSpeechStatus, LocalSpeechSupport, prepareLocalSpeech } from "../lib/local-speech";
+import { LocalSpeechStatus, prepareLocalSpeech } from "../lib/local-speech";
+import type { BrowserSpeechRecognition, BrowserSpeechRecognitionEvent, BrowserSpeechRecognitionErrorEvent } from "../lib/browser-speech";
+import { addNumberHints, readNumberResult } from "../lib/speech-results";
+import { SpeechTest } from "./speech-test";
 import { HistorySort, historyResult, sortHistoryAttempts } from "../lib/history-sort";
 import { CardState, Grade, Operation, TIMEOUT_MS, defaultState, gradeResponse, masteryScore } from "../lib/learning";
 import { normalizeSpokenPhrase, parseSpokenNumber } from "../lib/number-parser";
@@ -24,37 +27,6 @@ type AdminSessionSummary = { id: string; operation: Operation; startedAt: string
 type ManagedStudent = { id: string; name: string; createdAt: string; sessions: AdminSessionSummary[] };
 type ManagedUser = { id: string; email: string; displayName: string | null; role: AccountRole; status: "active" | "blocked"; createdAt: string; students: ManagedStudent[] };
 type LocalUser = { id: string; name: string; createdAt: string };
-type BrowserSpeechResult = { isFinal: boolean; length: number; [index: number]: { transcript: string } };
-type BrowserSpeechResultList = { length: number; [index: number]: BrowserSpeechResult };
-type BrowserSpeechRecognitionEvent = { results: BrowserSpeechResultList };
-type BrowserSpeechRecognitionErrorEvent = { error: string };
-type BrowserSpeechRecognition = {
-  processLocally?: boolean;
-  lang: string;
-  continuous: boolean;
-  interimResults: boolean;
-  maxAlternatives: number;
-  onstart: (() => void) | null;
-  onaudiostart: (() => void) | null;
-  onsoundstart: (() => void) | null;
-  onspeechstart: (() => void) | null;
-  onspeechend: (() => void) | null;
-  onresult: ((event: BrowserSpeechRecognitionEvent) => void) | null;
-  onerror: ((event: BrowserSpeechRecognitionErrorEvent) => void) | null;
-  onend: (() => void) | null;
-  start: () => void;
-  stop: () => void;
-  abort: () => void;
-};
-type BrowserSpeechRecognitionConstructor = (new () => BrowserSpeechRecognition) & LocalSpeechSupport;
-
-declare global {
-  interface Window {
-    SpeechRecognition?: BrowserSpeechRecognitionConstructor;
-    webkitSpeechRecognition?: BrowserSpeechRecognitionConstructor;
-  }
-}
-
 const STORAGE_KEY = "math-facts-web-local-progress";
 const VOICE_MAPPINGS_KEY = "math-facts-web-voice-mappings";
 const LOCAL_USERS_KEY = "math-facts-web-local-users";
@@ -521,6 +493,8 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.maxAlternatives = 5;
+    let numberHints = addNumberHints(recognition, window.SpeechRecognitionPhrase);
+    let retryWithoutHints = false;
     let latestTranscript = "";
     let latestResponseMs = TIMEOUT_MS;
     let ready = false;
@@ -592,22 +566,10 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     };
     recognition.onresult = (event: BrowserSpeechRecognitionEvent) => {
       if (!isActive() || !ready || !event.results.length) return;
-      const transcripts: string[] = [];
-      for (let index = 0; index < event.results.length; index += 1) transcripts.push(event.results[index][0]?.transcript ?? "");
-      let transcript = transcripts.join(" ").trim();
-      // Respect the browser's first numeric interpretation, even if it is wrong.
-      // Consult alternatives only when the first transcript contains no number.
-      if (event.results.length === 1 && parseSpokenNumber(transcript, voiceMappingsRef.current) === null) {
-        const result = event.results[0];
-        for (let index = 1; index < result.length; index += 1) {
-          const alternative = result[index]?.transcript ?? "";
-          if (parseSpokenNumber(alternative, voiceMappingsRef.current) !== null) { transcript = alternative; break; }
-        }
-      }
+      const { transcript, value: parsedNumber } = readNumberResult(event.results, voiceMappingsRef.current);
       // An empty browser result is not an answer. Keep listening within the
       // original deadline, and don't erase a number already heard.
       if (!transcript) return;
-      const parsedNumber = parseSpokenNumber(transcript, voiceMappingsRef.current);
       const sameNumber = parsedNumber !== null && parsedNumber === parseSpokenNumber(latestTranscript, voiceMappingsRef.current);
       // Keep the time already displayed when the final event merely confirms
       // the same number. A revised number gets its own arrival time.
@@ -631,6 +593,13 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
       }
     };
     recognition.onerror = (event: BrowserSpeechRecognitionErrorEvent) => {
+      if (!isActive()) return;
+      if (event.error === "phrases-not-supported" && numberHints) {
+        recognition.phrases = [];
+        numberHints = false;
+        retryWithoutHints = true;
+        return;
+      }
       if (event.error === "no-speech") return;
       if (recognition.processLocally && (event.error === "language-not-supported" || event.error === "service-not-allowed")) {
         localSpeechReadyRef.current = false;
@@ -648,6 +617,11 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     };
     recognition.onend = () => {
       if (!isActive()) return;
+      if (retryWithoutHints && !drainingResult) {
+        retryWithoutHints = false;
+        try { recognition.start(); } catch { fail("Microphone stopped. Tap Mic to retry."); }
+        return;
+      }
       if (!ready) fail("Microphone did not start. Tap Mic to retry.");
       else if (drainingResult) finish();
       else if (parseSpokenNumber(latestTranscript, voiceMappingsRef.current) !== null) finish();
@@ -892,6 +866,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
             {localSpeechStatus === "browser" && <><button className="button primary" onClick={() => void prepareSpeech()}>Try on-device recognition</button><span>Optional · availability varies by browser</span></>}
             {localSpeechStatus === "ready" && <button className="button secondary" onClick={() => { localSpeechReadyRef.current = false; setLocalSpeechStatus("browser"); }}>Use browser recognition</button>}
           </div>
+          <SpeechTest key={localSpeechStatus === "ready" ? "local" : "browser"} local={localSpeechStatus === "ready"} />
         </section>}
         <section className="session-settings" aria-labelledby="session-settings-title">
         <h2 id="session-settings-title">Your practice session</h2>

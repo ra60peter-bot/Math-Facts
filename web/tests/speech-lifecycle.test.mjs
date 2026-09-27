@@ -11,6 +11,10 @@ const parser = { exports: {} };
 vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(root, "lib/number-parser.ts"), "utf8"), {
   compilerOptions: { module: ts.ModuleKind.CommonJS },
 }).outputText, { exports: parser.exports });
+const speech = { exports: {} };
+vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(root, "lib/speech-results.ts"), "utf8"), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS },
+}).outputText, { exports: speech.exports, require: () => parser.exports });
 const source = fs.readFileSync(path.join(root, "components/math-facts-app.tsx"), "utf8");
 const start = source.indexOf("  const startListening = useCallback(");
 const end = source.indexOf("  useEffect(() => { startListeningRef", start);
@@ -38,6 +42,8 @@ function harness() {
     answerFor: () => 28,
     setListenState: value => statuses.push(value),
     parseSpokenNumber: parser.exports.parseSpokenNumber,
+    readNumberResult: speech.exports.readNumberResult,
+    addNumberHints: speech.exports.addNumberHints,
     stopListening() {
       timers.delete(context.timeoutRef.current);
       context.timeoutRef.current = null;
@@ -273,6 +279,64 @@ test("a final answer introduction does not commit before a single-syllable numbe
       assert.equal(h.answers.length, 1); assert.equal(h.answers[0][2], expected, ending);
     }
   }
+});
+
+test("short number alternatives in later segments survive a finalized introduction", () => {
+  for (const [word, expected] of [["to", 2], ["too", 2], ["for", 4], ["six", 6], ["ate", 8], ["ten", 10], ["forty", 40]]) {
+    const h = harness(); h.startAudio(); h.clock(800); h.result("The answer is", true);
+    h.clock(1000);
+    h.recognition.onresult({ results: [
+      { 0: { transcript: "The answer is" }, length: 1, isFinal: true },
+      { 0: { transcript: "" }, 1: { transcript: word }, length: 2, isFinal: true },
+    ] });
+    assert.equal(h.answers[0][2], expected, word);
+  }
+});
+
+test("a numeric primary segment wins over other numeric alternatives", () => {
+  const h = harness(); h.startAudio(); h.recognition.onresult({ results: [
+    { 0: { transcript: "The answer is" }, length: 1, isFinal: true },
+    { 0: { transcript: "six" }, 1: { transcript: "eight" }, length: 2, isFinal: true },
+  ] });
+  assert.equal(h.answers[0][2], 6);
+});
+
+test("short homophones and repeated answers are numbers, not sums", () => {
+  for (const [text, expected] of [["won", 1], ["to", 2], ["too", 2], ["the answer is to", 2], ["the answer is too", 2], ["two two", 2], ["six six", 6], ["ten, ten", 10], ["forty forty", 40], ["28 28", 28], ["twenty eight twenty eight", 28], ["one hundred and forty four", 144]]) {
+    assert.equal(parser.exports.parseSpokenNumber(text), expected, text);
+  }
+  for (const text of ["The answer is", "go to school", "this is for you", "two or eight", "six ten", "twenty eight six", "silence"]) {
+    assert.equal(parser.exports.parseSpokenNumber(text), null, text);
+  }
+});
+
+test("number hints cover the vocabulary equally and are local-only", () => {
+  class Phrase { constructor(phrase, boost) { this.phrase = phrase; this.boost = boost; } }
+  const local = { processLocally: true, phrases: [] };
+  assert.equal(speech.exports.addNumberHints(local, Phrase), true);
+  for (const word of ["two", "four", "six", "eight", "ten", "forty"]) {
+    assert.ok(local.phrases.some(p => p.phrase === word && p.boost === 3));
+  }
+  const browser = { phrases: [] };
+  assert.equal(speech.exports.addNumberHints(browser, Phrase), false);
+  assert.equal(browser.phrases.length, 0);
+  assert.equal(speech.exports.addNumberHints({ processLocally: true }, Phrase), false);
+});
+
+test("unsupported native hints retry without changing engines or answer deadline", () => {
+  const h = harness(); h.context.localSpeechReadyRef.current = true;
+  h.context.window.SpeechRecognitionPhrase = class { constructor(phrase, boost) { this.phrase = phrase; this.boost = boost; } };
+  let recognition;
+  h.context.window.SpeechRecognition = class { constructor() { recognition = { phrases: [], start() {}, stop() {} }; return recognition; } };
+  h.context.listen({id: "local"});
+  assert.ok(recognition.phrases.length > 0);
+  let starts = 0; recognition.start = () => { starts++; };
+  recognition.onerror({ error: "phrases-not-supported" }); recognition.onend();
+  assert.equal(starts, 1); assert.equal(recognition.phrases.length, 0);
+  assert.equal(recognition.processLocally, true);
+  recognition.onaudiostart(); h.clock(600);
+  recognition.onresult({results: [{0:{transcript:"two"},length:1,isFinal:true}]});
+  assert.equal(h.answers[0][2], 2);
 });
 
 test("recognizer ending after an introduction restarts and accepts the following number", () => {

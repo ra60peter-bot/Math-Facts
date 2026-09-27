@@ -38,17 +38,14 @@ function numberToPhrases(value: number) {
 }
 
 const phraseToNumber: Record<string, number> = {};
-for (const answer of VALID_ANSWERS) for (const phrase of numberToPhrases(answer)) phraseToNumber[phrase] = answer;
+// Wrong answers are still answers: accept all numbers in the supported range,
+// not just products that appear in the fact grid.
+for (let answer = 0; answer <= 225; answer += 1) for (const phrase of numberToPhrases(answer)) phraseToNumber[phrase] = answer;
 Object.assign(phraseToNumber, {
+  won: 1, to: 2, too: 2,
   twelfth: 12, twelth: 12, free: 3, tree: 3, fife: 5, for: 4, fore: 4, fourth: 4,
   ate: 8, age: 8, nein: 9, mine: 9, tin: 10, fourty: 40,
 });
-
-const wordToNumber: Record<string, number> = Object.fromEntries(Object.entries(ones).map(([value, word]) => [word, Number(value)]));
-wordToNumber.oh = 0;
-wordToNumber.o = 0;
-for (const [value, word] of Object.entries(tensWords)) wordToNumber[word] = Number(value) * 10;
-wordToNumber.hundred = 100;
 
 export function normalizeSpokenPhrase(transcript: string) {
   return transcript.toLowerCase().replace(/[^a-z0-9\s-]/g, " ").replace(/-/g, " ").replace(/\s+/g, " ").trim();
@@ -81,20 +78,18 @@ export function parseSpokenNumber(transcript: string, mappings: Record<string, n
     return parseSpokenNumber(answerPhrase[1], mappings);
   }
 
-  const tokens = cleaned.split(/\s+/).filter((word) => word in wordToNumber);
-  if (tokens.length === 0) return null;
-  let result = 0;
-  let current = 0;
-  for (const token of tokens) {
-    const value = wordToNumber[token];
-    if (value === 100) {
-      current = Math.max(current, 1) * 100;
-      result += current;
-      current = 0;
-    } else {
-      current += value;
-    }
+  const withoutAnd = cleaned.replace(/\band\b\s*/g, "").trim();
+  if (withoutAnd in phraseToNumber) return phraseToNumber[withoutAnd];
+
+  // Repeating a short answer ("two two", "ten, ten") must not add it
+  // together. Only accept an exact repetition; conflicting numbers are ambiguous.
+  const words = cleaned.split(" ");
+  for (let size = 1; size <= words.length / 2; size += 1) {
+    if (words.length % size !== 0) continue;
+    const phrase = words.slice(0, size).join(" ");
+    if (!words.every((word, index) => word === words[index % size])) continue;
+    const value = parseSpokenNumber(phrase, mappings);
+    if (value !== null) return value;
   }
-  result += current;
-  return Number.isSafeInteger(result) ? result : null;
+  return null;
 }

@@ -88,6 +88,11 @@ h2 { font-size: 20px; letter-spacing: -.02em; }
 .voice-settings .voice-error { margin-top: 8px; color: var(--red); }
 .voice-settings-action { display: grid; gap: 8px; }
 .voice-settings-action:empty { display: none; }
+.speech-test { flex: 1 0 100%; border-top: 1px solid var(--line); padding-top: 14px; }
+.speech-test summary { cursor: pointer; font-weight: 700; color: var(--ink); }
+.speech-test p { margin-top: 12px; }
+.speech-test .form-row { margin: 12px 0; }
+.speech-test textarea { display: block; width: 100%; margin-top: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: 13px/1.5 monospace; resize: vertical; }
 .voice-settings-action > span { color: var(--muted); font-size: 12px; text-align: center; }
 .session-settings { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 24px; margin: 0 0 24px; }
 .session-settings h2 { margin-bottom: 16px; }

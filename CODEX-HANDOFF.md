@@ -2,6 +2,12 @@
 
 Updated September 26, 2026. Read this before continuing work.
 
+### Current follow-up: dropped short-number alternatives and diagnostics
+
+User still sees `Heard: The answer is` with no number for 1+1. Microphone works in other apps; do not attribute this to hardware. Fixed app-side omissions: to/too=2 and won=1 in standalone/answer phrases; alternate transcripts are checked for every segment, including a number after a finalized prefix; identical repetitions like "ten ten" are one answer, never a sum. Unrelated words or conflicting numbers are not silently added. All primary numeric answers still win over alternatives regardless of expected answer. Shared selection lives in `web/lib/speech-results.ts`, speech types in `web/lib/browser-speech.ts`.
+
+Native on-device engines receive equal vocabulary hints for number words when supported. Browser service mode is unchanged; unsupported local hints are removed and recognition restarted without changing mode or extending the answer deadline. New `Test speech recognition` panel in setup logs real raw alternatives, segments, boundaries, and parsed values locally for 15 seconds; no audio, scores, or diagnostics are saved/uploaded. It unmounts/stops capture when practice starts. This enables actual-machine evidence rather than only mocked callbacks. No claim that engine-level failure to transcribe standalone numbers is resolved until a real test confirms it. Existing four-second practice timing and instant interim feedback remain.
+
 ### Latest screenshot diagnosis: final segments without a number
 
 User supplied 3+1 marked Wrong at0.8s with Heard: The answer is. Reproduced bug: `onresult` committed any final transcript, even a final nonnumeric prefix. Recognition now waits for a numeric result across segments and empty-session restarts; deadline finalization offers an unscored retry for nonnumeric transcripts. Parser strips answer introductions before parsing digits, words, or existing aliases (for=4, ate=8). 40 tests and build passed, including prefix-final then separate four/six/eight/ten segments in both modes. This is a concrete app bug fix, not proof that all acoustic recognition failures are resolved. The paired screenshot heard28 for7+1 and correctly marked it wrong. The rollback request was canceled; current work builds on the latest version restored by6a5d754.
