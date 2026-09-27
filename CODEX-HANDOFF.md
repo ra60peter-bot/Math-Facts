@@ -2,6 +2,10 @@
 
 Updated September 27, 2026. Read this before continuing work.
 
+### Repeat completed practice session
+
+Session complete now has a primary Repeat button beside New session and View history. Calls the existing startPractice handler with the retained student, operation, selected facts, question count, and speech mode. Starts a fresh session/attempt list and builds a new queue using current learning state; identical configuration does not mean replaying the same question order. New session still opens setup.
+
 ### Subject mastery bar in practice setup
 
 Added a prominent purple mastery panel with a gold position marker inside Your practice session. Shows selected student, selected operation, score out of 1,000, and a 0/250/500/750/1,000 scale. Uses existing masteryScore over ALL cards for the operation (81 addition, 45 subtraction, 121 multiplication), not only selected practice facts. No scoring, speech, database, or scheduling changes. Component is web/components/mastery-progress.tsx; includes labeled accessible progressbar and light/dark colors. Temporary browser fixture checked scores 0/224/500/1000, operation/student label changes, and both themes; removed before release.

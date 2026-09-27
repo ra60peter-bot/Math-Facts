@@ -921,7 +921,8 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
           <Stat label="Average response time" value={currentSession.attempts.length ? `${(currentSession.attempts.reduce((sum, attempt) => sum + attempt.responseMs, 0) / currentSession.attempts.length / 1000).toFixed(1)}s` : "—"} />
         </div>
         <div className="form-row">
-          <button className="button primary" onClick={() => setPhase("setup")}>New session</button>
+          <button className="button primary" onClick={startPractice} disabled={!speechSupported || selectedCount === 0} title="Practice again with the same student, operation, selected facts, and question count">Repeat</button>
+          <button className="button secondary" onClick={() => setPhase("setup")}>New session</button>
           <button className="button secondary" onClick={() => setView("history")}>View history</button>
         </div>
       </div>
