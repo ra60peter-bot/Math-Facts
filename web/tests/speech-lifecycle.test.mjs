@@ -27,7 +27,8 @@ function harness() {
   let now = 0, id = 0, recognizer;
   const timers = new Map(), answers = [], statuses = [], feedback = [], questionReady = [];
   const context = {
-    useCallback: fn => fn, TIMEOUT_MS: 4000,
+    useCallback: fn => fn, TIMEOUT_MS: 4000, SPEECH_RESULT_GRACE_MS: 3000,
+    navigator: { userAgent: "test browser" }, setSpeechReport() {},
     window: {
       SpeechRecognition: class { constructor() { recognizer = { start() {}, stop() {} }; return recognizer; } },
       setTimeout(fn, delay) { timers.set(++id, { fn, at: now + delay }); return id; },
@@ -62,6 +63,14 @@ function harness() {
     get recognition() { return recognizer; },
     startAudio() { recognizer.onstart(); recognizer.onaudiostart(); },
     clock(value) { now = value; },
+    advance(value) {
+      for (;;) {
+        const entry = [...timers.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+        if (!entry || entry[1].at > value) break;
+        const [key, timer] = entry; timers.delete(key); now = timer.at; timer.fn();
+      }
+      now = value;
+    },
     expire() { const entry = [...timers.entries()].sort((a, b) => a[1].at - b[1].at)[0]; assert.ok(entry); const [key, timer] = entry; timers.delete(key); now = timer.at; timer.fn(); },
     result(text, final = false, alternatives = []) {
       const values = [text, ...alternatives].map(transcript => ({ transcript }));
@@ -105,6 +114,38 @@ test("browser mode also flushes a pending short answer at the deadline", () => {
   assert.equal(stops, 1); assert.equal(h.answers.length, 0);
   h.clock(4150); h.result("six", true);
   assert.equal(h.answers[0][2], 6); assert.equal(h.answers[0][3], 850);
+});
+
+test("a single syllable delayed 1.5 seconds is not discarded by the old 800ms processing limit", () => {
+  for (const local of [false, true]) {
+    const h = harness(); h.context.localSpeechReadyRef.current = local; h.context.listen({id: "late-short-answer"});
+    let captureStoppedAt = null;
+    h.recognition.stop = () => { captureStoppedAt = h.context.performance.now(); };
+    h.startAudio(); h.clock(3700); h.recognition.onspeechstart(); h.expire();
+    assert.equal(captureStoppedAt, 4000);
+    h.advance(5200); h.result("two");
+    assert.equal(h.feedback.at(-1).tone, "wrong"); // test card expects 28
+    assert.ok(h.feedback.at(-1).text.includes("3.7 seconds"));
+    h.clock(5700); h.result("two", true);
+    assert.equal(h.answers.length, 1); assert.equal(h.answers[0][2], 2); assert.equal(h.answers[0][3], 3700);
+  }
+});
+
+test("recognition processing wait is bounded and late callbacks after expiry cannot score", () => {
+  const h = harness(); h.startAudio(); h.expire(); h.expire();
+  assert.equal(h.context.performance.now(), 7000);
+  h.clock(7100); h.result("two", true);
+  assert.equal(h.answers.length, 0); assert.equal(h.context.recognitionRef.current, null);
+});
+
+test("failed practice reports include raw alternatives, capture deadline and end", () => {
+  const h = harness(); let report = ""; h.context.setSpeechReport = (value) => { report = value; };
+  h.startAudio(); h.clock(1000); h.result("The answer is", true, ["answer is"]);
+  h.expire(); h.recognition.onend();
+  assert.match(report, /choice 2: "answer is"/);
+  assert.match(report, /Four-second deadline: stop audio capture/);
+  assert.match(report, /Recognition ended/);
+  assert.equal(h.answers.length, 0);
 });
 
 test("empty results distinguish no sound, sound without speech, and speech without a transcript", () => {

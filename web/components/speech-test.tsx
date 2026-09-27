@@ -2,12 +2,16 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { BrowserSpeechRecognition } from "../lib/browser-speech";
+import { SPEECH_RESULT_GRACE_MS } from "../lib/browser-speech";
+import { TIMEOUT_MS } from "../lib/learning";
 import { addNumberHints, readNumberResult } from "../lib/speech-results";
 import { parseSpokenNumber } from "../lib/number-parser";
 
 export function SpeechTest({ local }: { local: boolean }) {
   const [running, setRunning] = useState(false);
-  const [status, setStatus] = useState("Test a few short answers before practicing.");
+  const [status, setStatus] = useState("Choose one number, then start the test.");
+  const [word, setWord] = useState("two");
+  const [heard, setHeard] = useState("");
   const [report, setReport] = useState<string[]>([]);
   const stopRef = useRef<() => void>(() => {});
   useEffect(() => () => stopRef.current(), []);
@@ -25,9 +29,12 @@ export function SpeechTest({ local }: { local: boolean }) {
     let hints = addNumberHints(recognition, window.SpeechRecognitionPhrase);
     let retry = false;
     let active = true;
+    let ready = false;
+    let timer: number | undefined;
     let drain: number | undefined;
     const began = performance.now();
-    setReport([`Speech test v2 · ${local ? "on-device" : "browser"} · number hints: ${hints}`, navigator.userAgent]);
+    setHeard("");
+    setReport([`Speech test v3 · one answer · ${local ? "on-device" : "browser"} · number hints: ${hints}`, navigator.userAgent]);
     const log = (message: string) => {
       if (active) setReport((lines) => [...lines.slice(-119), `${((performance.now() - began) / 1000).toFixed(3)}s ${message}`]);
     };
@@ -45,15 +52,25 @@ export function SpeechTest({ local }: { local: boolean }) {
       log("Test ended");
       cleanup();
       setRunning(false);
-      setStatus("Test finished. See the browser's exact words below.");
+      setStatus("Test finished. You can test another number.");
+    };
+    const stopCapture = () => {
+      log("Four-second deadline: stop audio capture; wait for buffered transcript");
+      setStatus("Finishing recognition…");
+      drain = window.setTimeout(finish, SPEECH_RESULT_GRACE_MS);
+      try { recognition.stop(); } catch { finish(); }
     };
     // Component unmount (including starting practice) releases the mic without
     // writing any progress or leaving a second recognizer running.
     stopRef.current = cleanup;
     recognition.onstart = () => log("Recognition started");
     recognition.onaudiostart = () => {
-      log("Audio capture started");
-      setStatus("Listening for 15 seconds. Say: two … four … six … eight … ten … forty.");
+      if (ready) return;
+      ready = true;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(stopCapture, TIMEOUT_MS);
+      log("Audio capture started; four-second answer window started");
+      setStatus(`Say “${word}” now. Say only this one number.`);
     };
     recognition.onsoundstart = () => log("Sound detected");
     recognition.onspeechstart = () => log("Speech detected");
@@ -61,7 +78,8 @@ export function SpeechTest({ local }: { local: boolean }) {
     recognition.onresult = (event) => {
       if (!active) return;
       const selected = readNumberResult(event.results);
-      log(`Combined: ${JSON.stringify(selected.transcript)} → ${selected.value ?? "no number"}`);
+      setHeard(`Heard: “${selected.transcript}” → ${selected.value ?? "not a single number"}`);
+      log(`Combined: ${JSON.stringify(selected.transcript)} → ${selected.value ?? "not a single number"}`);
       for (let i = event.resultIndex ?? 0; i < event.results.length; i += 1) {
         const result = event.results[i];
         for (let j = 0; j < result.length; j += 1) {
@@ -69,6 +87,7 @@ export function SpeechTest({ local }: { local: boolean }) {
           log(`Segment ${i + 1} ${result.isFinal ? "final" : "interim"}, choice ${j + 1}: ${JSON.stringify(alternative.transcript)} → ${parseSpokenNumber(alternative.transcript) ?? "no number"}`);
         }
       }
+      if (selected.value !== null && event.results[event.results.length - 1]?.isFinal) finish();
     };
     recognition.onerror = (event) => {
       log(`Recognition error: ${event.error}`);
@@ -88,11 +107,7 @@ export function SpeechTest({ local }: { local: boolean }) {
     };
     setRunning(true);
     setStatus("Opening microphone…");
-    const timer = window.setTimeout(() => {
-      log("Stopping capture to collect final words");
-      drain = window.setTimeout(finish, 3000);
-      try { recognition.stop(); } catch { finish(); }
-    }, 15000);
+    timer = window.setTimeout(() => { log("Audio capture did not start"); finish(); }, TIMEOUT_MS);
     try { recognition.start(); } catch { log("Could not start recognition"); finish(); }
   };
 
@@ -100,9 +115,13 @@ export function SpeechTest({ local }: { local: boolean }) {
     if (!event.currentTarget.open) { stopRef.current(); setRunning(false); }
   }}>
     <summary>Test speech recognition</summary>
-    <p>This test shows the browser’s exact words and the number the app understands. It does not save scores or audio.</p>
+    <p>Test one answer at a time, with the same four-second answering window as practice. Wait for “Say” before speaking. This does not save scores or audio.</p>
     <p role="status">{status}</p>
+    {heard && <p>{heard}</p>}
     <div className="form-row">
+      <label>Number to test<select value={word} disabled={running} onChange={(event) => setWord(event.target.value)}>
+        {["two", "four", "six", "eight", "ten", "forty"].map((number) => <option key={number}>{number}</option>)}
+      </select></label>
       <button type="button" className="button secondary" disabled={running} onClick={start}>Start speech test</button>
       {running && <button type="button" className="button secondary" onClick={() => { stopRef.current(); setRunning(false); setStatus("Test stopped."); }}>Stop test</button>}
     </div>

@@ -2,6 +2,14 @@
 
 Updated September 26, 2026. Read this before continuing work.
 
+### Real browser trace follow-up: delayed transcript delivery
+
+User supplied a browser-mode Chrome153/Windows trace: audiostart0.336s, speechstart6.236s, first interim "Two"7.737s, then cumulative "Two four six eight ten 40", final11.251s. All six numbers are present in this continuous utterance; the combined list is correctly rejected as a single answer. This does NOT establish accuracy for isolated syllables or prove a practice timeout caused the earlier loss. It establishes a1.501s speech-event-to-transcript delay in this trace.
+
+Practice's800ms post-stop transcript allowance could discard a delayed result from near the4s deadline. It now allows up to3s for processing via `SPEECH_RESULT_GRACE_MS`, still stops audio at4s, and still displays numeric interim feedback immediately. Speech onset timing remains separate from delivery timing.48 tests pass, including a3.7s speech event whose transcript arrives5.2s; capture ends4s and the answer retains3.7s timing. A failed practice attempt now exposes a bounded local-only recognition report with actual lifecycle/raw alternatives under `Recognition details for this attempt`. No audio or reports are uploaded.
+
+Setup speech test v3 now tests ONE selected number per run and starts its4s answer window at audiostart, with the same3s processing allowance. This replaces the misleading15s list test. Next useful evidence is a standalone test or the actual failed-practice report. Do not claim the engine-level missing single-word issue is solved until real testing confirms it.
+
 ### Current follow-up: dropped short-number alternatives and diagnostics
 
 User still sees `Heard: The answer is` with no number for 1+1. Microphone works in other apps; do not attribute this to hardware. Fixed app-side omissions: to/too=2 and won=1 in standalone/answer phrases; alternate transcripts are checked for every segment, including a number after a finalized prefix; identical repetitions like "ten ten" are one answer, never a sum. Unrelated words or conflicting numbers are not silently added. All primary numeric answers still win over alternatives regardless of expected answer. Shared selection lives in `web/lib/speech-results.ts`, speech types in `web/lib/browser-speech.ts`.

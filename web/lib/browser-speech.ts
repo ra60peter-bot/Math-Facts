@@ -1,6 +1,10 @@
 import type { LocalSpeechSupport } from "./local-speech";
 import type { SpeechPhrase, SpeechResults } from "./speech-results";
 
+// A real browser trace took 1.5s from speech detection to its first transcript.
+// This bounds processing after stop(); it never extends the capture window.
+export const SPEECH_RESULT_GRACE_MS = 3000;
+
 export type BrowserSpeechRecognitionEvent = { results: SpeechResults; resultIndex?: number };
 export type BrowserSpeechRecognitionErrorEvent = { error: string };
 export type BrowserSpeechRecognition = {

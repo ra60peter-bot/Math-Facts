@@ -7,6 +7,7 @@ import { loadCloudProgress, loadVoiceMappings, saveVoiceMapping, syncCloudProgre
 import { reviewCardState } from "../lib/fsrs-scheduler";
 import { LocalSpeechStatus, prepareLocalSpeech } from "../lib/local-speech";
 import type { BrowserSpeechRecognition, BrowserSpeechRecognitionEvent, BrowserSpeechRecognitionErrorEvent } from "../lib/browser-speech";
+import { SPEECH_RESULT_GRACE_MS } from "../lib/browser-speech";
 import { addNumberHints, readNumberResult } from "../lib/speech-results";
 import { SpeechTest } from "./speech-test";
 import { HistorySort, historyResult, sortHistoryAttempts } from "../lib/history-sort";
@@ -254,6 +255,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
   const [current, setCurrent] = useState<FactCard | null>(null);
   const [progress, setProgress] = useState(0);
   const [heard, setHeard] = useState("");
+  const [speechReport, setSpeechReport] = useState("");
   const [listenState, setListenState] = useState("");
   const [result, setResult] = useState<{ text: string; tone: "good" | "slow" | "wrong"; correctAnswer?: number } | null>(null);
   const [pendingWrong, setPendingWrong] = useState<PendingWrong | null>(null);
@@ -485,6 +487,13 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     setHeard("");
     setResult(null);
     setListenState("Starting microphone…");
+    setSpeechReport("");
+    const recognitionStartedAt = performance.now();
+    const trace = [`Practice speech v3 · ${localSpeechReadyRef.current ? "on-device" : "browser"}`, navigator.userAgent];
+    const log = (message: string) => {
+      if (trace.length >= 100) trace.splice(2, 1);
+      trace.push(`${((performance.now() - recognitionStartedAt) / 1000).toFixed(3)}s ${message}`);
+    };
     const recognition = new Recognition();
     if (localSpeechReadyRef.current) recognition.processLocally = true;
     recognition.lang = "en-US";
@@ -504,6 +513,8 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     const isActive = () => recognitionRef.current === recognition && !answerHandledRef.current;
     const fail = (message: string) => {
       if (!isActive()) return;
+      log(`Not scored: ${message}`);
+      setSpeechReport(trace.join("\n"));
       stopListening();
       setResult(null);
       setListenState(message);
@@ -532,11 +543,13 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
       // Stop capturing at four seconds, but let either engine return its
       // buffered result. abort() would discard that result entirely.
       drainingResult = true;
+      log("Four-second deadline: stop audio capture; wait for buffered transcript");
       setListenState("Finishing recognition…");
-      timeoutRef.current = window.setTimeout(finish, 800);
+      timeoutRef.current = window.setTimeout(finish, SPEECH_RESULT_GRACE_MS);
       try { recognition.stop(); } catch { finish(); }
     };
     recognition.onstart = () => {
+      if (isActive()) log("Recognition started");
       if (isActive() && !ready) setListenState("Opening microphone — wait for the question…");
     };
     // Service start is not proof that microphone capture has started. Reveal
@@ -545,6 +558,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     recognition.onaudiostart = () => {
       if (!isActive() || ready) return;
       ready = true;
+      log("Audio capture started; question revealed; four-second timer started");
       if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
       questionStartRef.current = performance.now();
       setQuestionReady(true);
@@ -552,21 +566,27 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
       timeoutRef.current = window.setTimeout(answerDeadline, TIMEOUT_MS);
     };
     recognition.onsoundstart = () => {
-      if (isActive() && ready && !drainingResult) soundDetected = true;
+      if (isActive() && ready && !drainingResult) { soundDetected = true; log("Sound detected"); }
     };
     recognition.onspeechstart = () => {
       if (isActive() && ready && !drainingResult && soundResponseMsRef.current === null) {
         soundResponseMsRef.current = Math.min(Math.round(performance.now() - questionStartRef.current), TIMEOUT_MS);
+        log("Speech detected");
       }
     };
     recognition.onspeechend = () => {
       // A silence boundary is not a final answer. Leave the recognizer open
       // for the decoder to finish, or for the learner to repeat a short word.
-      if (isActive() && ready && !drainingResult) setListenState("Listening — recognizing your answer…");
+      if (isActive() && ready && !drainingResult) { log("Speech boundary (still listening)"); setListenState("Listening — recognizing your answer…"); }
     };
     recognition.onresult = (event: BrowserSpeechRecognitionEvent) => {
       if (!isActive() || !ready || !event.results.length) return;
       const { transcript, value: parsedNumber } = readNumberResult(event.results, voiceMappingsRef.current);
+      log(`Combined: ${JSON.stringify(transcript)} → ${parsedNumber ?? "no single number"}`);
+      for (let i = event.resultIndex ?? 0; i < event.results.length; i += 1) {
+        const segment = event.results[i];
+        for (let j = 0; j < segment.length; j += 1) log(`Segment ${i + 1} ${segment.isFinal ? "final" : "interim"}, choice ${j + 1}: ${JSON.stringify(segment[j].transcript)}`);
+      }
       // An empty browser result is not an answer. Keep listening within the
       // original deadline, and don't erase a number already heard.
       if (!transcript) return;
@@ -594,6 +614,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     };
     recognition.onerror = (event: BrowserSpeechRecognitionErrorEvent) => {
       if (!isActive()) return;
+      log(`Recognition error: ${event.error}`);
       if (event.error === "phrases-not-supported" && numberHints) {
         recognition.phrases = [];
         numberHints = false;
@@ -617,6 +638,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     };
     recognition.onend = () => {
       if (!isActive()) return;
+      log("Recognition ended");
       if (retryWithoutHints && !drainingResult) {
         retryWithoutHints = false;
         try { recognition.start(); } catch { fail("Microphone stopped. Tap Mic to retry."); }
@@ -812,6 +834,11 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
               <button className="button primary" onClick={continueAfterWrong}>{pendingWrong?.transcript ? "No, next question" : "Next question"}</button>
             </>}
           </div>
+          {speechReport && !result && <details className="speech-test">
+            <summary>Recognition details for this attempt</summary>
+            <p>These details stay on this device. Copy them if your answer was not recognized.</p>
+            <textarea readOnly rows={7} aria-label="Practice speech recognition report" value={speechReport} />
+          </details>}
         </footer>
       </main>
     );
