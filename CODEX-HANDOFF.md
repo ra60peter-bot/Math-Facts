@@ -2,6 +2,10 @@
 
 Updated September 26, 2026. Read this before continuing work.
 
+### Most recent follow-up: single syllables in both modes
+
+User reports six/eight/ten frequently return no transcript in BOTH browser and native on-device modes. The shared recognition lifecycle now uses continuous=true and does not call stop() at speechend. Question reveal and the four-second timer wait for `audiostart` (actual capture), not `start` (service start). Both modes allow up to800ms for a buffered result after stopping capture at the empty-transcript deadline. Empty results in either mode do not score an attempt and report whether the browser emitted sound/speech events or neither. No engine-specific acoustic root cause is proven; do not claim actual microphone accuracy is fixed. 37 mocked lifecycle/parser/persistence tests pass. Older descriptions of continuous=false, start-based timing, speechend stopping, or local-only draining below are superseded by this section.
+
 ### Latest follow-up: on-device mode
 
 User subsequently reported both ten and forty still produce no transcript in **on-device** mode (screenshot: 10 × 4, Wrong 4.0s, No answer heard). The local answer deadline now calls stop() and allows up to800ms for a buffered result instead of immediately aborting it. Capture still ends at4s. An empty local result offers a manual retry without scoring a wrong answer; it does not silently switch to an online service. Browser-mode deadline behavior is unchanged. Tests simulate buffered forty, empty finalization, and late events; 33 tests pass. Real microphone recognition remains unverified: do not claim standalone ten/forty accuracy is solved by mocked tests.

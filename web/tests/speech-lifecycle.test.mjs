@@ -21,11 +21,11 @@ const compiled = ts.transpileModule(source.slice(start, end) + "\nglobalThis.lis
 
 function harness() {
   let now = 0, id = 0, recognizer;
-  const timers = new Map(), answers = [], statuses = [], feedback = [];
+  const timers = new Map(), answers = [], statuses = [], feedback = [], questionReady = [];
   const context = {
     useCallback: fn => fn, TIMEOUT_MS: 4000,
     window: {
-      SpeechRecognition: class { constructor() { recognizer = { start() {} }; return recognizer; } },
+      SpeechRecognition: class { constructor() { recognizer = { start() {}, stop() {} }; return recognizer; } },
       setTimeout(fn, delay) { timers.set(++id, { fn, at: now + delay }); return id; },
       clearTimeout: key => timers.delete(key),
     },
@@ -34,7 +34,7 @@ function harness() {
     answerHandledRef: { current: true }, timeoutRef: { current: null },
     recognitionRef: { current: null }, voiceMappingsRef: { current: {} },
     localSpeechReadyRef: { current: false }, setLocalSpeechStatus() {},
-    setSpeechSupported() {}, setQuestionReady() {}, setHeard() {}, setResult(value) { feedback.push(value); },
+    setSpeechSupported() {}, setQuestionReady(value) { questionReady.push(value); }, setHeard() {}, setResult(value) { feedback.push(value); },
     answerFor: () => 28,
     setListenState: value => statuses.push(value),
     parseSpokenNumber: parser.exports.parseSpokenNumber,
@@ -52,8 +52,9 @@ function harness() {
   vm.runInNewContext(compiled, context);
   context.listen({ id: "test" });
   return {
-    answers, statuses, context, feedback,
+    answers, statuses, context, feedback, questionReady,
     get recognition() { return recognizer; },
+    startAudio() { recognizer.onstart(); recognizer.onaudiostart(); },
     clock(value) { now = value; },
     expire() { const entry = [...timers.entries()].sort((a, b) => a[1].at - b[1].at)[0]; assert.ok(entry); const [key, timer] = entry; timers.delete(key); now = timer.at; timer.fn(); },
     result(text, final = false, alternatives = []) {
@@ -65,15 +66,54 @@ function harness() {
 }
 
 test("startup delay does not consume the four-second answer window", () => {
-  const h = harness(); h.clock(1800); h.recognition.onstart();
+  const h = harness(); h.clock(1800); h.startAudio();
   assert.equal(h.context.questionStartRef.current, 1800);
-  h.expire(); assert.equal(h.answers[0][3], 4000);
+  h.clock(2000); h.result("six"); h.expire(); assert.equal(h.answers[0][3], 200);
+});
+
+test("both engines wait for audio capture before revealing the question or timing a short answer", () => {
+  for (const local of [false, true]) {
+    for (const [word, expected] of [["six", 6], ["eight", 8], ["ten", 10]]) {
+      const h = harness(); h.context.localSpeechReadyRef.current = local; h.context.listen({ id: "audio-ready" });
+      assert.equal(h.recognition.continuous, true);
+      h.clock(300); h.recognition.onstart();
+      assert.equal(h.questionReady.at(-1), false);
+      h.clock(1300); h.recognition.onaudiostart();
+      assert.equal(h.questionReady.at(-1), true);
+      h.clock(1900); h.recognition.onsoundstart(); h.recognition.onspeechstart();
+      h.clock(2000); h.recognition.onspeechend(); h.result(word, true);
+      assert.equal(h.answers[0][2], expected); assert.equal(h.answers[0][3], 600);
+    }
+  }
+});
+
+test("service start without audio capture fails safely instead of showing a timed question", () => {
+  const h = harness(); h.recognition.onstart(); h.expire();
+  assert.equal(h.questionReady.at(-1), false); assert.equal(h.answers.length, 0);
+  assert.match(h.statuses.at(-1), /did not start/);
+});
+
+test("browser mode also flushes a pending short answer at the deadline", () => {
+  const h = harness(); let stops = 0; h.recognition.stop = () => { stops++; };
+  h.startAudio(); h.clock(850); h.recognition.onspeechstart(); h.expire();
+  assert.equal(stops, 1); assert.equal(h.answers.length, 0);
+  h.clock(4150); h.result("six", true);
+  assert.equal(h.answers[0][2], 6); assert.equal(h.answers[0][3], 850);
+});
+
+test("empty results distinguish no sound, sound without speech, and speech without a transcript", () => {
+  for (const [event, expected] of [[null, /no microphone sound/], ["onsoundstart", /Sound was detected/], ["onspeechstart", /Speech was detected/]]) {
+    const h = harness(); h.startAudio(); h.clock(500);
+    if (event) h.recognition[event]();
+    h.expire(); h.expire();
+    assert.equal(h.answers.length, 0); assert.match(h.statuses.at(-1), expected);
+  }
 });
 
 test("on-device deadline stops capture and allows a buffered forty result to finish", () => {
   const h = harness(); h.context.localSpeechReadyRef.current = true; h.context.listen({ id: "local" });
   let stops = 0; h.recognition.stop = () => { stops++; };
-  h.recognition.onstart(); h.clock(900); h.recognition.onspeechstart();
+  h.startAudio(); h.clock(900); h.recognition.onspeechstart();
   h.expire(); assert.equal(stops, 1); assert.equal(h.answers.length, 0);
   h.clock(4200); h.result("forty", true);
   assert.equal(h.answers.length, 1); assert.equal(h.answers[0][2], 40); assert.equal(h.answers[0][3], 900);
@@ -81,7 +121,7 @@ test("on-device deadline stops capture and allows a buffered forty result to fin
 
 test("on-device empty result offers retry without scoring a wrong answer", () => {
   const h = harness(); h.context.localSpeechReadyRef.current = true; h.context.listen({ id: "local" });
-  h.recognition.stop = () => {}; h.recognition.onstart(); h.expire(); h.expire();
+  h.recognition.stop = () => {}; h.startAudio(); h.expire(); h.expire();
   assert.equal(h.answers.length, 0);
   assert.match(h.statuses.at(-1), /No answer was scored/);
   assert.equal(h.context.recognitionRef.current, null);
@@ -89,12 +129,12 @@ test("on-device empty result offers retry without scoring a wrong answer", () =>
 
 test("on-device end during finalization and late results do not score an empty attempt", () => {
   const h = harness(); h.context.localSpeechReadyRef.current = true; h.context.listen({ id: "local" });
-  h.recognition.stop = () => {}; h.recognition.onstart(); h.expire(); h.recognition.onend();
+  h.recognition.stop = () => {}; h.startAudio(); h.expire(); h.recognition.onend();
   h.result("ten", true); assert.equal(h.answers.length, 0);
 });
 
 test("live numeric feedback appears immediately without prematurely saving a partial answer", () => {
-  const h = harness(); h.recognition.onstart(); h.clock(700);
+  const h = harness(); h.startAudio(); h.clock(700);
   h.result("twenty");
   assert.equal(h.feedback.at(-1).tone, "wrong");
   assert.equal(h.answers.length, 0);
@@ -108,7 +148,7 @@ test("live numeric feedback appears immediately without prematurely saving a par
 });
 
 test("revised nonnumeric transcript and recognition failures clear live feedback", () => {
-  const h = harness(); h.recognition.onstart(); h.result("28");
+  const h = harness(); h.startAudio(); h.result("28");
   h.result("unrecognized"); assert.equal(h.feedback.at(-1), null);
   h.result("28"); h.recognition.onerror({ error: "network" });
   assert.equal(h.feedback.at(-1), null); assert.equal(h.answers.length, 0);
@@ -126,21 +166,21 @@ test("browser recognition remains the default until local speech is explicitly e
   assert.equal(h.recognition.processLocally, undefined);
 });
 test("partial eight is retained and timed from speech onset", () => {
-  const h = harness(); h.recognition.onstart(); h.clock(600); h.recognition.onspeechstart();
+  const h = harness(); h.startAudio(); h.clock(600); h.recognition.onspeechstart();
   h.clock(900); h.result("eight"); h.expire();
   assert.equal(h.answers[0][2], 8); assert.equal(h.answers[0][3], 600);
 });
 test("recognition end finalizes partial numbers without waiting for the deadline", () => {
-  const h = harness(); h.recognition.onstart(); h.clock(700); h.result("ate"); h.recognition.onend();
+  const h = harness(); h.startAudio(); h.clock(700); h.result("ate"); h.recognition.onend();
   assert.equal(h.answers[0][2], 8); assert.equal(h.answers.length, 1);
 });
 
 test("empty recognition restarts within the original deadline and can hear ten or forty", () => {
   for (const [word, expected] of [["ten", 10], ["forty", 40]]) {
     const h = harness(); let restarts = 0; h.recognition.start = () => { restarts++; };
-    h.recognition.onstart(); h.clock(500); h.result("", true); h.recognition.onend();
+    h.startAudio(); h.clock(500); h.result("", true); h.recognition.onend();
     assert.equal(restarts, 1); assert.equal(h.answers.length, 0);
-    h.clock(700); h.recognition.onstart();
+    h.clock(700); h.startAudio();
     assert.equal(h.context.questionStartRef.current, 0);
     h.clock(1100); h.result(word, true);
     assert.equal(h.answers[0][2], expected); assert.equal(h.answers[0][3], 1100);
@@ -149,76 +189,77 @@ test("empty recognition restarts within the original deadline and can hear ten o
 
 test("empty recovery is bounded and does not extend the four-second timeout", () => {
   const h = harness(); let restarts = 0; h.recognition.start = () => { restarts++; };
-  h.recognition.onstart(); h.clock(500);
+  h.startAudio(); h.clock(500);
   h.recognition.onend(); h.recognition.onend(); h.recognition.onend();
   assert.equal(restarts, 2); h.expire();
-  assert.equal(h.answers.length, 1); assert.equal(h.answers[0][3], 4000);
+  assert.equal(h.answers.length, 0); h.expire();
+  assert.match(h.statuses.at(-1), /No answer was scored/);
 });
 
 test("empty final transcript does not erase an already recognized number", () => {
-  const h = harness(); h.recognition.onstart(); h.clock(800); h.result("forty");
+  const h = harness(); h.startAudio(); h.clock(800); h.result("forty");
   h.result("", true); h.recognition.onend();
   assert.equal(h.answers[0][2], 40); assert.equal(h.answers[0][3], 800);
 });
 
-test("speech end requests finalization once and waits for the completed number", () => {
+test("speech boundaries do not stop recognition or truncate a completed number", () => {
   const h = harness(); let stops = 0;
   h.recognition.stop = () => { stops++; };
-  h.recognition.onstart(); h.clock(600); h.recognition.onspeechstart();
+  h.startAudio(); h.clock(600); h.recognition.onspeechstart();
   h.result("twenty"); h.recognition.onspeechend(); h.recognition.onspeechend();
-  assert.equal(stops, 1); assert.equal(h.answers.length, 0);
+  assert.equal(stops, 0); assert.equal(h.answers.length, 0);
   h.clock(1200); h.result("twenty one", true);
   assert.equal(h.answers[0][2], 21); assert.equal(h.answers[0][3], 600);
 });
 
-test("speech-end stop failure preserves the answer deadline", () => {
+test("deadline stop failure offers retry instead of hanging", () => {
   const h = harness(); h.recognition.stop = () => { throw new Error("already stopped"); };
-  h.recognition.onstart(); h.result("unrecognized"); h.clock(4000); h.result("unrecognized"); h.recognition.onspeechend(); h.expire();
-  assert.equal(h.answers.length, 1); assert.equal(h.answers[0][3], 4000);
+  h.startAudio(); h.expire();
+  assert.equal(h.answers.length, 0); assert.match(h.statuses.at(-1), /No answer was scored/);
 });
 
 test("short ten can arrive after speechend without the app stopping recognition early", () => {
   const h = harness(); let stops = 0; h.recognition.stop = () => { stops++; };
-  h.recognition.onstart(); h.clock(700); h.recognition.onspeechstart();
+  h.startAudio(); h.clock(700); h.recognition.onspeechstart();
   h.clock(900); h.recognition.onspeechend();
   assert.equal(stops, 0); assert.equal(h.answers.length, 0);
   h.clock(1000); h.result("ten", true);
   assert.equal(h.answers[0][2], 10); assert.equal(h.answers[0][3], 700);
 });
 test("alternatives only replace an unrecognized transcript", () => {
-  const h = harness(); h.recognition.onstart(); h.result("unrecognized", true, ["eight"]);
+  const h = harness(); h.startAudio(); h.result("unrecognized", true, ["eight"]);
   assert.equal(h.answers[0][2], 8);
-  const wrong = harness(); wrong.recognition.onstart(); wrong.result("seven", true, ["eight"]);
+  const wrong = harness(); wrong.startAudio(); wrong.result("seven", true, ["eight"]);
   assert.equal(wrong.answers[0][2], 7);
 });
 
 test("ten and forty survive word, digit, punctuation, filler and alternative transcripts", () => {
   for (const [transcript, expected] of [["ten", 10], ["10.", 10], ["um 10", 10], ["tin", 10], ["forty", 40], ["40!", 40], ["uh 40", 40], ["fourty", 40]]) {
-    const h = harness(); h.recognition.onstart(); h.clock(900); h.result(transcript, true);
+    const h = harness(); h.startAudio(); h.clock(900); h.result(transcript, true);
     assert.equal(h.answers[0][2], expected, transcript);
   }
   for (const [word, expected] of [["ten", 10], ["forty", 40]]) {
-    const h = harness(); h.recognition.onstart(); h.result("unrecognized", true, [word]);
+    const h = harness(); h.startAudio(); h.result("unrecognized", true, [word]);
     assert.equal(h.answers[0][2], expected);
   }
 });
 
 test("digit answers inside answer phrases are recognized without guessing from equations", () => {
   for (const transcript of ["Your answer is 10", "the answer is 10", "my answer is 10", "answer 10", "it's 10", "the answer is ten"]) {
-    const h = harness(); h.recognition.onstart(); h.clock(900); h.result(transcript, true);
+    const h = harness(); h.startAudio(); h.clock(900); h.result(transcript, true);
     assert.equal(h.answers[0][2], 10, transcript);
   }
   assert.equal(parser.exports.parseSpokenNumber("the answer is 10 or 40"), null);
   assert.equal(parser.exports.parseSpokenNumber("2 + 8 = 10"), null);
 });
 test("unrecognized speech reaches wrong-answer review instead of getting stuck", () => {
-  const h = harness(); h.recognition.onstart(); h.result("unrecognized", true);
+  const h = harness(); h.startAudio(); h.result("unrecognized", true);
   assert.equal(h.answers.length, 1); assert.equal(h.answers[0][2], null);
   assert.equal(h.answers[0][1], "unrecognized");
 });
 test("51 and fifty-one are recognized even though they are not multiplication products", () => {
   for (const transcript of ["51", "fifty-one"]) {
-    const h = harness(); h.recognition.onstart(); h.clock(900); h.result(transcript, true);
+    const h = harness(); h.startAudio(); h.clock(900); h.result(transcript, true);
     assert.equal(h.answers[0][2], 51); assert.equal(h.answers[0][3], 900);
   }
 });
@@ -253,19 +294,19 @@ test("accepting a heard answer corrects the original attempt and regrades from i
 });
 test("network and permission failures do not record an answer", () => {
   for (const error of ["network", "not-allowed", "audio-capture"]) {
-    const h = harness(); h.recognition.onstart(); h.recognition.onerror({ error });
+    const h = harness(); h.startAudio(); h.recognition.onerror({ error });
     assert.equal(h.answers.length, 0); assert.equal(h.context.timeoutRef.current, null);
   }
 });
 test("startup watchdog and late callbacks do not record an answer", () => {
-  const h = harness(); h.expire(); h.recognition.onstart(); h.result("eight", true);
+  const h = harness(); h.expire(); h.startAudio(); h.result("eight", true);
   assert.equal(h.answers.length, 0); assert.match(h.statuses.at(-1), /did not start/);
 });
 test("manual restart invalidates old results and resets the answer guard", () => {
-  const h = harness(); h.recognition.onstart(); const old = h.recognition;
+  const h = harness(); h.startAudio(); const old = h.recognition;
   h.context.listen({ id: "new" }); old.onresult({results: [{0:{transcript:"eight"},length:1,isFinal:true}]});
   assert.equal(h.answers.length, 0);
-  h.recognition.onstart(); h.result("nine", true); assert.equal(h.answers[0][2], 9);
+  h.startAudio(); h.result("nine", true); assert.equal(h.answers[0][2], 9);
 });
 
 test("practice feedback uses the inclusive 1.5-second cutoff and correct colors", () => {

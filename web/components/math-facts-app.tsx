@@ -35,6 +35,8 @@ type BrowserSpeechRecognition = {
   interimResults: boolean;
   maxAlternatives: number;
   onstart: (() => void) | null;
+  onaudiostart: (() => void) | null;
+  onsoundstart: (() => void) | null;
   onspeechstart: (() => void) | null;
   onspeechend: (() => void) | null;
   onresult: ((event: BrowserSpeechRecognitionEvent) => void) | null;
@@ -353,6 +355,8 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
       recognition.onresult = null;
       recognition.onerror = null;
       recognition.onstart = null;
+      recognition.onaudiostart = null;
+      recognition.onsoundstart = null;
       recognition.onspeechstart = null;
       recognition.onspeechend = null;
       recognition.abort();
@@ -512,15 +516,17 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     const recognition = new Recognition();
     if (localSpeechReadyRef.current) recognition.processLocally = true;
     recognition.lang = "en-US";
-    recognition.continuous = false;
+    // Keep the recognizer open across short speech/silence boundaries. We own
+    // the question deadline and stop it after an answer is committed.
+    recognition.continuous = true;
     recognition.interimResults = true;
     recognition.maxAlternatives = 5;
     let latestTranscript = "";
     let latestResponseMs = TIMEOUT_MS;
     let ready = false;
-    let finalizationRequested = false;
     let emptyRestarts = 0;
-    let drainingLocalResult = false;
+    let drainingResult = false;
+    let soundDetected = false;
     const isActive = () => recognitionRef.current === recognition && !answerHandledRef.current;
     const fail = (message: string) => {
       if (!isActive()) return;
@@ -530,8 +536,13 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     };
     const finish = () => {
       if (!isActive()) return;
-      if (recognition.processLocally && !latestTranscript) {
-        fail("On-device recognition returned no words. Tap Mic to retry, or exit practice and choose Use browser recognition. No answer was scored.");
+      if (!latestTranscript) {
+        const mode = recognition.processLocally ? "On-device" : "Browser";
+        const detail = soundResponseMsRef.current !== null
+          ? "Speech was detected, but no words were returned."
+          : soundDetected ? "Sound was detected, but no speech was recognized."
+            : "The browser reported no microphone sound. Check the selected microphone and input level.";
+        fail(`${mode} recognition: ${detail} Tap Mic to retry. No answer was scored.`);
         return;
       }
       const parsed = parseSpokenNumber(latestTranscript, voiceMappingsRef.current);
@@ -539,15 +550,21 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     };
     const answerDeadline = () => {
       if (!isActive()) return;
-      if (!recognition.processLocally || latestTranscript) { finish(); return; }
-      // Stop capturing at four seconds, but let the local engine return its
+      if (latestTranscript) { finish(); return; }
+      // Stop capturing at four seconds, but let either engine return its
       // buffered result. abort() would discard that result entirely.
-      drainingLocalResult = true;
-      setListenState("Finishing on-device recognition…");
+      drainingResult = true;
+      setListenState("Finishing recognition…");
       timeoutRef.current = window.setTimeout(finish, 800);
       try { recognition.stop(); } catch { finish(); }
     };
     recognition.onstart = () => {
+      if (isActive() && !ready) setListenState("Opening microphone — wait for the question…");
+    };
+    // Service start is not proof that microphone capture has started. Reveal
+    // the question only on audiostart so a quick single syllable is not lost
+    // in the gap between those two events.
+    recognition.onaudiostart = () => {
       if (!isActive() || ready) return;
       ready = true;
       if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
@@ -556,18 +573,18 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
       setListenState("Listening — say your answer");
       timeoutRef.current = window.setTimeout(answerDeadline, TIMEOUT_MS);
     };
+    recognition.onsoundstart = () => {
+      if (isActive() && ready && !drainingResult) soundDetected = true;
+    };
     recognition.onspeechstart = () => {
-      if (isActive() && ready && !drainingLocalResult && soundResponseMsRef.current === null) {
+      if (isActive() && ready && !drainingResult && soundResponseMsRef.current === null) {
         soundResponseMsRef.current = Math.min(Math.round(performance.now() - questionStartRef.current), TIMEOUT_MS);
       }
     };
     recognition.onspeechend = () => {
-      if (!isActive() || !ready || finalizationRequested || !latestTranscript) return;
-      finalizationRequested = true;
-      // Only request finalization after words have arrived. For a short word
-      // such as "ten", speechend can precede the first transcript; stopping
-      // at that point can interrupt recognition. The deadline stays active.
-      try { recognition.stop(); } catch { /* It may already be stopping. */ }
+      // A silence boundary is not a final answer. Leave the recognizer open
+      // for the decoder to finish, or for the learner to repeat a short word.
+      if (isActive() && ready && !drainingResult) setListenState("Listening — recognizing your answer…");
     };
     recognition.onresult = (event: BrowserSpeechRecognitionEvent) => {
       if (!isActive() || !ready || !event.results.length) return;
@@ -625,11 +642,10 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     recognition.onend = () => {
       if (!isActive()) return;
       if (!ready) fail("Microphone did not start. Tap Mic to retry.");
-      else if (drainingLocalResult) finish();
+      else if (drainingResult) finish();
       else if (latestTranscript) finish();
       else if (emptyRestarts < 2 && performance.now() - questionStartRef.current < TIMEOUT_MS) {
         emptyRestarts += 1;
-        finalizationRequested = false;
         setListenState("Listening — please repeat your answer");
         // Reuse the original question start and deadline: recovery must not
         // give extra answer time or record a second attempt.
