@@ -5,7 +5,6 @@ import type { User } from "@supabase/supabase-js";
 import { FactCard, answerFor, buildQueue, insertRetry, makeCards } from "../lib/cards";
 import { loadCloudProgress, loadVoiceMappings, saveVoiceMapping, syncCloudProgress, queueProgressWrite, rememberUploadedSessions } from "../lib/cloud-progress";
 import { reviewCardState } from "../lib/fsrs-scheduler";
-import { LocalSpeechStatus, LocalSpeechSupport, prepareLocalSpeech } from "../lib/local-speech";
 import { HistorySort, historyResult, sortHistoryAttempts } from "../lib/history-sort";
 import { CardState, Grade, Operation, TIMEOUT_MS, defaultState, gradeResponse, masteryScore } from "../lib/learning";
 import { normalizeSpokenPhrase, parseSpokenNumber } from "../lib/number-parser";
@@ -29,16 +28,12 @@ type BrowserSpeechResultList = { length: number; [index: number]: BrowserSpeechR
 type BrowserSpeechRecognitionEvent = { results: BrowserSpeechResultList };
 type BrowserSpeechRecognitionErrorEvent = { error: string };
 type BrowserSpeechRecognition = {
-  processLocally?: boolean;
   lang: string;
   continuous: boolean;
   interimResults: boolean;
   maxAlternatives: number;
   onstart: (() => void) | null;
-  onaudiostart: (() => void) | null;
-  onsoundstart: (() => void) | null;
   onspeechstart: (() => void) | null;
-  onspeechend: (() => void) | null;
   onresult: ((event: BrowserSpeechRecognitionEvent) => void) | null;
   onerror: ((event: BrowserSpeechRecognitionErrorEvent) => void) | null;
   onend: (() => void) | null;
@@ -46,7 +41,7 @@ type BrowserSpeechRecognition = {
   stop: () => void;
   abort: () => void;
 };
-type BrowserSpeechRecognitionConstructor = (new () => BrowserSpeechRecognition) & LocalSpeechSupport;
+type BrowserSpeechRecognitionConstructor = new () => BrowserSpeechRecognition;
 
 declare global {
   interface Window {
@@ -286,20 +281,6 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
   const [result, setResult] = useState<{ text: string; tone: "good" | "slow" | "wrong"; correctAnswer?: number } | null>(null);
   const [pendingWrong, setPendingWrong] = useState<PendingWrong | null>(null);
   const [speechSupported, setSpeechSupported] = useState(true);
-  const [localSpeechStatus, setLocalSpeechStatus] = useState<LocalSpeechStatus | "browser">("browser");
-  const [localSpeechError, setLocalSpeechError] = useState("");
-  const localSpeechReadyRef = useRef(false);
-  const localSpeechPreparationRef = useRef<Promise<boolean> | null>(null);
-  const prepareSpeech = useCallback(() => {
-    if (localSpeechPreparationRef.current) return localSpeechPreparationRef.current;
-    const Recognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
-    const pending = prepareLocalSpeech(Recognition, setLocalSpeechStatus, setLocalSpeechError).then((ready) => {
-      localSpeechReadyRef.current = ready;
-      return ready;
-    }).finally(() => { localSpeechPreparationRef.current = null; });
-    localSpeechPreparationRef.current = pending;
-    return pending;
-  }, []);
   const [questionReady, setQuestionReady] = useState(false);
 
   const loadStudents = useCallback(async () => {
@@ -355,10 +336,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
       recognition.onresult = null;
       recognition.onerror = null;
       recognition.onstart = null;
-      recognition.onaudiostart = null;
-      recognition.onsoundstart = null;
       recognition.onspeechstart = null;
-      recognition.onspeechend = null;
       recognition.abort();
     }
   }, []);
@@ -514,77 +492,37 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     setResult(null);
     setListenState("Starting microphone…");
     const recognition = new Recognition();
-    if (localSpeechReadyRef.current) recognition.processLocally = true;
     recognition.lang = "en-US";
-    // Keep the recognizer open across short speech/silence boundaries. We own
-    // the question deadline and stop it after an answer is committed.
-    recognition.continuous = true;
+    recognition.continuous = false;
     recognition.interimResults = true;
     recognition.maxAlternatives = 5;
     let latestTranscript = "";
     let latestResponseMs = TIMEOUT_MS;
     let ready = false;
-    let emptyRestarts = 0;
-    let drainingResult = false;
-    let soundDetected = false;
     const isActive = () => recognitionRef.current === recognition && !answerHandledRef.current;
     const fail = (message: string) => {
       if (!isActive()) return;
       stopListening();
-      setResult(null);
       setListenState(message);
     };
     const finish = () => {
       if (!isActive()) return;
-      if (!latestTranscript) {
-        const mode = recognition.processLocally ? "On-device" : "Browser";
-        const detail = soundResponseMsRef.current !== null
-          ? "Speech was detected, but no words were returned."
-          : soundDetected ? "Sound was detected, but no speech was recognized."
-            : "The browser reported no microphone sound. Check the selected microphone and input level.";
-        fail(`${mode} recognition: ${detail} Tap Mic to retry. No answer was scored.`);
-        return;
-      }
       const parsed = parseSpokenNumber(latestTranscript, voiceMappingsRef.current);
       handleResponse(card, latestTranscript, parsed, latestTranscript ? latestResponseMs : TIMEOUT_MS);
     };
-    const answerDeadline = () => {
-      if (!isActive()) return;
-      if (latestTranscript) { finish(); return; }
-      // Stop capturing at four seconds, but let either engine return its
-      // buffered result. abort() would discard that result entirely.
-      drainingResult = true;
-      setListenState("Finishing recognition…");
-      timeoutRef.current = window.setTimeout(finish, 800);
-      try { recognition.stop(); } catch { finish(); }
-    };
     recognition.onstart = () => {
-      if (isActive() && !ready) setListenState("Opening microphone — wait for the question…");
-    };
-    // Service start is not proof that microphone capture has started. Reveal
-    // the question only on audiostart so a quick single syllable is not lost
-    // in the gap between those two events.
-    recognition.onaudiostart = () => {
       if (!isActive() || ready) return;
       ready = true;
       if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
       questionStartRef.current = performance.now();
       setQuestionReady(true);
       setListenState("Listening — say your answer");
-      timeoutRef.current = window.setTimeout(answerDeadline, TIMEOUT_MS);
-    };
-    recognition.onsoundstart = () => {
-      if (isActive() && ready && !drainingResult) soundDetected = true;
+      timeoutRef.current = window.setTimeout(finish, TIMEOUT_MS);
     };
     recognition.onspeechstart = () => {
-      if (isActive() && ready && !drainingResult && soundResponseMsRef.current === null) {
+      if (isActive() && ready && soundResponseMsRef.current === null) {
         soundResponseMsRef.current = Math.min(Math.round(performance.now() - questionStartRef.current), TIMEOUT_MS);
       }
-    };
-    recognition.onspeechend = () => {
-      // A silence boundary is not a final answer. Leave the recognizer open
-      // for the decoder to finish, or for the learner to repeat a short word.
-      if (isActive() && ready && !drainingResult) setListenState("Listening — recognizing your answer…");
     };
     recognition.onresult = (event: BrowserSpeechRecognitionEvent) => {
       if (!isActive() || !ready || !event.results.length) return;
@@ -600,37 +538,13 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
           if (parseSpokenNumber(alternative, voiceMappingsRef.current) !== null) { transcript = alternative; break; }
         }
       }
-      // An empty browser result is not an answer. Keep listening within the
-      // original deadline, and don't erase a number already heard.
-      if (!transcript) return;
-      const parsedNumber = parseSpokenNumber(transcript, voiceMappingsRef.current);
-      const sameNumber = parsedNumber !== null && parsedNumber === parseSpokenNumber(latestTranscript, voiceMappingsRef.current);
-      // Keep the time already displayed when the final event merely confirms
-      // the same number. A revised number gets its own arrival time.
-      if (!sameNumber) latestResponseMs = soundResponseMsRef.current ?? Math.min(Math.round(performance.now() - questionStartRef.current), TIMEOUT_MS);
       latestTranscript = transcript;
+      latestResponseMs = soundResponseMsRef.current ?? Math.min(Math.round(performance.now() - questionStartRef.current), TIMEOUT_MS);
       setHeard(transcript);
-      if (event.results[event.results.length - 1]?.isFinal) {
-        finish();
-      } else {
-        // Show feedback alongside the live transcript. Do not stop recognition or
-        // save an attempt yet: a partial "twenty" can still become "twenty eight".
-        const parsed = parseSpokenNumber(transcript, voiceMappingsRef.current);
-        const correct = parsed === answerFor(card);
-        const elapsed = `${(latestResponseMs / 1000).toFixed(1)} seconds`;
-        setResult(parsed === null ? null : correct
-          ? { text: `${latestResponseMs <= 1500 ? "Correct!" : "Slow!"} ${elapsed}`, tone: latestResponseMs <= 1500 ? "good" : "slow" }
-          : { text: `Wrong! ${elapsed}`, tone: "wrong" });
-      }
+      if (event.results[event.results.length - 1]?.isFinal) finish();
     };
     recognition.onerror = (event: BrowserSpeechRecognitionErrorEvent) => {
       if (event.error === "no-speech") return;
-      if (recognition.processLocally && (event.error === "language-not-supported" || event.error === "service-not-allowed")) {
-        localSpeechReadyRef.current = false;
-        setLocalSpeechStatus("failed");
-        fail("On-device speech is unavailable. Tap Mic to retry with browser speech.");
-        return;
-      }
       const messages: Record<string, string> = {
         "not-allowed": "Allow microphone access, then tap Mic to retry.",
         "service-not-allowed": "Speech recognition is blocked by this browser. Check its permissions.",
@@ -642,16 +556,8 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     recognition.onend = () => {
       if (!isActive()) return;
       if (!ready) fail("Microphone did not start. Tap Mic to retry.");
-      else if (drainingResult) finish();
       else if (latestTranscript) finish();
-      else if (emptyRestarts < 2 && performance.now() - questionStartRef.current < TIMEOUT_MS) {
-        emptyRestarts += 1;
-        setListenState("Listening — please repeat your answer");
-        // Reuse the original question start and deadline: recovery must not
-        // give extra answer time or record a second attempt.
-        try { recognition.start(); }
-        catch { fail("Microphone stopped. Tap Mic to retry."); }
-      } else setListenState("No speech detected — tap Mic to retry");
+      else setListenState("No speech detected");
     };
     recognitionRef.current = recognition;
     // Startup failures do not count as a student's answer or consume answer time.
@@ -811,7 +717,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
           <div className={`fact ${questionReady ? "" : "fact-preparing"}`}>{questionReady ? <>{current.a} {operationSymbol(current.operation)} {current.b}</> : "Get ready…"}</div>
           <div className="practice-feedback" aria-live="polite" aria-atomic="true">
             <div className={`result ${result?.tone ?? ""}`}>{result?.text ?? (questionReady ? "Say your answer aloud" : "Waiting for the microphone")}</div>
-            <div className="answer-reveal">{result?.correctAnswer !== undefined ? `Correct answer: ${result.correctAnswer}` : ""}</div>
+            <div className="answer-reveal">{result?.tone === "wrong" ? `Correct answer: ${result.correctAnswer}` : ""}</div>
           </div>
         </section>
         <footer className="practice-controls">
@@ -823,7 +729,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
             </div>
           </div>
           <div className="answer-actions">
-            {pendingWrong && <>
+            {result?.tone === "wrong" && <>
               {pendingWrong?.transcript && <>
                 <p className="accept-answer-prompt">Accept “{pendingWrong.transcript}” as the correct answer?</p>
                 <button className="button secondary" onClick={allowPendingAnswer}>Yes, accept answer</button>
@@ -852,7 +758,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
         <div className="stats">
           <Stat label="Accuracy" value={`${Math.round((currentSession.attempts.filter((attempt) => attempt.answerCorrect).length / Math.max(currentSession.attempts.length, 1)) * 100)}%`} />
           <Stat label="Questions" value={String(currentSession.attempts.length)} />
-          <Stat label="Average response time" value={currentSession.attempts.length ? `${(currentSession.attempts.reduce((sum, attempt) => sum + attempt.responseMs, 0) / currentSession.attempts.length / 1000).toFixed(1)}s` : "—"} />
+          <Stat label="Mastery" value={`${summary.score}/1000`} />
         </div>
         <div className="form-row">
           <button className="button primary" onClick={() => setPhase("setup")}>New session</button>
@@ -867,25 +773,6 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
           <p className="muted">Choose your facts, then speak each answer aloud. Build confidence one question at a time.</p>
         </header>
         {!speechSupported && <p className="notice">This app requires speech recognition. Use the latest Chrome or Edge on a laptop or desktop, then allow microphone access.</p>}
-        {speechSupported && <section className="voice-settings" aria-labelledby="voice-settings-title">
-          <div className="voice-settings-copy">
-            <div className="voice-settings-heading"><h2 id="voice-settings-title">Voice recognition</h2><span className="voice-mode">{localSpeechStatus === "ready" ? "On-device active" : "Browser active"}</span></div>
-            <div role="status">
-              <p>{localSpeechStatus === "browser" ? "Using your browser to hear answers. You can also try an English speech pack that runs on this device." :
-                localSpeechStatus === "ready" ? "The English speech pack is ready. Answers are recognized on this device." :
-                localSpeechStatus === "checking" ? "Checking whether this browser supports on-device recognition…" :
-                localSpeechStatus === "downloading" ? "Downloading the English speech pack. You can practice while it downloads." :
-                localSpeechStatus === "unsupported" ? "This browser does not support the on-device English speech pack. Browser recognition is still available." :
-                "The speech pack could not be prepared. You can still practice with browser recognition."}</p>
-              {localSpeechStatus === "failed" && localSpeechError && <p className="voice-error">{localSpeechError}</p>}
-            </div>
-          </div>
-          <div className="voice-settings-action">
-            {localSpeechStatus === "failed" && <button className="button primary" onClick={() => void prepareSpeech()}>Retry speech download</button>}
-            {localSpeechStatus === "browser" && <><button className="button primary" onClick={() => void prepareSpeech()}>Try on-device recognition</button><span>Optional · availability varies by browser</span></>}
-            {localSpeechStatus === "ready" && <button className="button secondary" onClick={() => { localSpeechReadyRef.current = false; setLocalSpeechStatus("browser"); }}>Use browser recognition</button>}
-          </div>
-        </section>}
         <section className="session-settings" aria-labelledby="session-settings-title">
         <h2 id="session-settings-title">Your practice session</h2>
         <div className="form-row">
@@ -921,9 +808,9 @@ function Stat({ label, value }: { label: string; value: string }) { return <div 
 
 function FactGrid({ operation, selected, onChange }: { operation: Operation; selected: Set<string>; onChange: (selected: Set<string>) => void }) {
   const cards = makeCards(operation);
-  const rows = [...new Set(cards.map((card) => card.b))];
-  const columns = [...new Set(cards.map((card) => card.a))];
-  const keyFor = (row: number, column: number) => `${operation}-${column}-${row}`;
+  const rows = [...new Set(cards.map((card) => card.a))];
+  const columns = [...new Set(cards.map((card) => card.b))];
+  const keyFor = (row: number, column: number) => `${operation}-${row}-${column}`;
   const validKeys = new Set(cards.map((card) => card.id));
   const toggleKeys = (keys: string[]) => {
     const next = new Set(selected);
@@ -938,7 +825,7 @@ function FactGrid({ operation, selected, onChange }: { operation: Operation; sel
       ? "Subtraction: positive answers using 1 through 10"
       : "Multiplication: 2 through 12";
 
-  return <section className="fact-selector" aria-labelledby="fact-selector-title"><div className="fact-selector-heading"><div><h2 id="fact-selector-title">Choose facts</h2><p className="muted">{description}</p></div><div className="selection-actions"><button className="button secondary" onClick={() => onChange(new Set(allKeys))}>Select all</button><button className="button secondary" onClick={() => onChange(new Set())}>Clear all</button></div></div><div className="fact-grid-scroll"><div className="fact-grid" style={{ gridTemplateColumns: `64px repeat(${columns.length}, minmax(38px, 1fr))` }}><AxisToggle label="All" keys={allKeys} selected={selected} onToggle={toggleKeys} />{columns.map((column) => <AxisToggle key={`column-${column}`} label={String(column)} keys={rows.map((row) => keyFor(row, column)).filter((key) => validKeys.has(key))} selected={selected} onToggle={toggleKeys} />)}{rows.map((row) => <div className="fact-grid-row" key={`row-${row}`} style={{ gridColumn: `1 / span ${columns.length + 1}`, gridTemplateColumns: `64px repeat(${columns.length}, minmax(38px, 1fr))` }}><AxisToggle label={String(row)} keys={columns.map((column) => keyFor(row, column)).filter((key) => validKeys.has(key))} selected={selected} onToggle={toggleKeys} />{columns.map((column) => { const key = keyFor(row, column); return validKeys.has(key) ? <label className="fact-cell" key={key} title={`${column} ${operationWord(operation)} ${row}`}><input type="checkbox" checked={selected.has(key)} onChange={() => toggleKeys([key])} /><span className="sr-only">{column} {operationWord(operation)} {row}</span></label> : <span className="fact-cell unavailable" aria-hidden="true" key={key} />; })}</div>)}</div></div><p className="grid-help">Top numbers = first number. Left numbers = second number. Select a row or column to choose a group.</p></section>;
+  return <section className="fact-selector" aria-labelledby="fact-selector-title"><div className="fact-selector-heading"><div><h2 id="fact-selector-title">Choose facts</h2><p className="muted">{description}</p></div><div className="selection-actions"><button className="button secondary" onClick={() => onChange(new Set(allKeys))}>Select all</button><button className="button secondary" onClick={() => onChange(new Set())}>Clear all</button></div></div><div className="fact-grid-scroll"><div className="fact-grid" style={{ gridTemplateColumns: `64px repeat(${columns.length}, minmax(38px, 1fr))` }}><AxisToggle label="All" keys={allKeys} selected={selected} onToggle={toggleKeys} />{columns.map((column) => <AxisToggle key={`column-${column}`} label={String(column)} keys={rows.map((row) => keyFor(row, column)).filter((key) => validKeys.has(key))} selected={selected} onToggle={toggleKeys} />)}{rows.map((row) => <div className="fact-grid-row" key={`row-${row}`} style={{ gridColumn: `1 / span ${columns.length + 1}`, gridTemplateColumns: `64px repeat(${columns.length}, minmax(38px, 1fr))` }}><AxisToggle label={String(row)} keys={columns.map((column) => keyFor(row, column)).filter((key) => validKeys.has(key))} selected={selected} onToggle={toggleKeys} />{columns.map((column) => { const key = keyFor(row, column); return validKeys.has(key) ? <label className="fact-cell" key={key} title={`${row} ${operationWord(operation)} ${column}`}><input type="checkbox" checked={selected.has(key)} onChange={() => toggleKeys([key])} /><span className="sr-only">{row} {operationWord(operation)} {column}</span></label> : <span className="fact-cell unavailable" aria-hidden="true" key={key} />; })}</div>)}</div></div><p className="grid-help">Select individual facts, or use a row or column to select a group.</p></section>;
 }
 
 function AxisToggle({ label, keys, selected, onToggle }: { label: string; keys: string[]; selected: Set<string>; onToggle: (keys: string[]) => void }) {
