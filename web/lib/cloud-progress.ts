@@ -1,9 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CardState, Operation } from "./learning";
+import type { AutomaticProgress, AttemptEvent } from "./automaticity";
 
-export type CloudAttempt = { id: string; fact: string; operation: Operation; correct: boolean; answerCorrect: boolean; responseMs: number; heard: string; at: string };
+export type CloudAttempt = { id: string; fact: string; operation: Operation; correct: boolean; answerCorrect: boolean; responseMs: number; heard: string; at: string; audit?: AttemptEvent };
 export type CloudSession = { id: string; operation: Operation; startedAt: string; endedAt: string; attempts: CloudAttempt[] };
-export type CloudProgress = { states: Record<string, CardState>; sessions: CloudSession[] };
+export type CloudProgress = { states: Record<string, CardState>; sessions: CloudSession[]; automaticity?: AutomaticProgress | null };
 
 const writes = new Map<string, Promise<unknown>>();
 export function queueProgressWrite<T>(studentId: string, action: () => Promise<T>): Promise<T> {
@@ -23,6 +24,11 @@ export function rememberUploadedSessions(studentId: string, ids: string[]) {
   localStorage.setItem(`math-facts-uploaded:${studentId}`, JSON.stringify([...uploaded]));
 }
 
+export function mergePendingSessions(studentId: string, local: CloudSession[], cloud: CloudSession[]) {
+  const uploaded = uploadedSessions(studentId);
+  return [...local.filter(session => !uploaded.has(session.id) && !cloud.some(remote => remote.id === session.id)), ...cloud];
+}
+
 export async function loadVoiceMappings(client: SupabaseClient, studentId: string) {
   const { data, error } = await client.from("voice_mappings").select("heard_text,answer").eq("student_id", studentId);
   if (error) return {};
@@ -38,12 +44,13 @@ export async function saveVoiceMapping(client: SupabaseClient, studentId: string
 }
 
 export async function loadCloudProgress(client: SupabaseClient, studentId: string): Promise<CloudProgress | null> {
-  const [{ data: stateRows, error: stateError }, { data: sessionRows, error: sessionError }, { data: attemptRows, error: attemptError }] = await Promise.all([
+  const [{ data: stateRows, error: stateError }, { data: sessionRows, error: sessionError }, { data: attemptRows, error: attemptError }, { data: student, error: schedulerError }] = await Promise.all([
     client.from("card_states").select("*").eq("student_id", studentId),
     client.from("practice_sessions").select("*").eq("student_id", studentId).order("ended_at", { ascending: false }),
     client.from("attempts").select("*").eq("student_id", studentId),
+    client.from("students").select("automaticity").eq("id", studentId).single(),
   ]);
-  if (stateError || sessionError || attemptError) return null;
+  if (stateError || sessionError || attemptError || schedulerError) throw new Error("Progress could not be loaded. Check your connection before practicing on another device.");
   rememberUploadedSessions(studentId, (sessionRows ?? []).map((row) => row.id));
   const states: Record<string, CardState> = {};
   for (const row of stateRows ?? []) {
@@ -70,10 +77,10 @@ export async function loadCloudProgress(client: SupabaseClient, studentId: strin
   for (const row of attemptRows ?? []) {
     const attempts = attemptsBySession.get(row.session_id) ?? [];
     const answerCorrect = row.answer_correct ?? row.is_correct;
-    attempts.push({ id: row.id, fact: row.fact, operation: row.operation, correct: answerCorrect, answerCorrect, responseMs: row.response_ms, heard: row.heard ?? "", at: row.created_at });
+    attempts.push({ id: row.id, fact: row.fact, operation: row.operation, correct: answerCorrect, answerCorrect, responseMs: row.response_ms, heard: row.heard ?? "", at: row.created_at, audit: row.automaticity_audit ?? undefined });
     attemptsBySession.set(row.session_id, attempts);
   }
-  return { states, sessions: (sessionRows ?? []).map((row) => ({ id: row.id, operation: row.operation, startedAt: row.started_at, endedAt: row.ended_at, attempts: attemptsBySession.get(row.id) ?? [] })) };
+  return { states, automaticity: student?.automaticity ?? null, sessions: (sessionRows ?? []).map((row) => ({ id: row.id, operation: row.operation, startedAt: row.started_at, endedAt: row.ended_at, attempts: attemptsBySession.get(row.id) ?? [] })) };
 }
 
 export function syncCloudProgress(client: SupabaseClient, studentId: string, accountId: string, progress: CloudProgress) {
@@ -97,10 +104,14 @@ async function uploadProgress(client: SupabaseClient, studentId: string, account
   const sessions = pendingSessions.map((session) => ({ id: session.id, student_id: studentId, user_id: accountId, operation: session.operation, started_at: session.startedAt, ended_at: session.endedAt }));
   const attempts = pendingSessions.flatMap((session) => session.attempts.map((attempt) => ({
     id: attempt.id, session_id: session.id, student_id: studentId, user_id: accountId, fact: attempt.fact, operation: attempt.operation,
-    is_correct: attempt.answerCorrect, answer_correct: attempt.answerCorrect, response_ms: attempt.responseMs, heard: attempt.heard || null, created_at: attempt.at,
+    is_correct: attempt.answerCorrect, answer_correct: attempt.answerCorrect, response_ms: attempt.responseMs, heard: attempt.heard || null, created_at: attempt.at, automaticity_audit: attempt.audit ?? null,
   })));
   if (stateRows.length) { const { error } = await client.from("card_states").upsert(stateRows, { onConflict: "student_id,card_key" }); if (error) throw error; }
   if (sessions.length) { const { error } = await client.from("practice_sessions").upsert(sessions, { onConflict: "id" }); if (error) throw error; }
   if (attempts.length) { const { error } = await client.from("attempts").upsert(attempts, { onConflict: "id" }); if (error) throw error; }
+  if (progress.automaticity) {
+    const { error } = await client.from("students").update({ automaticity: progress.automaticity }).eq("id", studentId);
+    if (error) throw error;
+  }
   rememberUploadedSessions(studentId, pendingSessions.map((session) => session.id));
 }

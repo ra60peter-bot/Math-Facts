@@ -42,6 +42,7 @@ test("deleted or previously uploaded sessions are not recreated by stale synchro
   const calls = [];
   const client = { from: table => ({ upsert: async rows => { calls.push({ table, rows }); return { error: null }; } }) };
   cloud.rememberUploadedSessions("student", ["deleted"]);
+  assert.equal(JSON.stringify(cloud.mergePendingSessions("student",[{id:"deleted"},{id:"new"}],[])),JSON.stringify([{id:"new"}]));
   await cloud.syncCloudProgress(client, "student", "owner", { states: {}, sessions: [
     { id: "deleted", attempts: [], operation: "add" },
     { id: "new", attempts: [], operation: "add" },
@@ -58,4 +59,26 @@ test("deletion waits for an in-flight upload before subsequent writes", async ()
   const deletion = cloud.queueProgressWrite("student", async () => { steps.push("delete"); });
   release(); await Promise.all([upload, deletion]);
   assert.deepEqual(steps, ["upload", "delete"]);
+});
+
+test("cloud progress round-trips scheduler snapshot and original attempt audit", async () => {
+  const storage=new Map(),rows={students:[],card_states:[],practice_sessions:[],attempts:[]};
+  let automaticity=null;
+  const client={from:table=>({
+    upsert:async data=>{rows[table]=data;return {error:null};},
+    update:data=>({eq:async()=>{automaticity=JSON.parse(JSON.stringify(data.automaticity));return {error:null};}}),
+    select:()=>({eq:()=>({
+      then:resolve=>resolve({data:rows[table],error:null}),
+      order:async()=>({data:rows[table],error:null}),
+      single:async()=>({data:{automaticity},error:null}),
+    })}),
+  })};
+  const cloud=compile("lib/cloud-progress.ts",{localStorage:{getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,v)}});
+  const audit={id:"attempt",result:"SLOW_CORRECT",responseMs:2400,qualifiedCold:true,firstAnswerCorrect:true};
+  const auto={version:1,learnerId:"student",session:{id:"active",counts:{"mul-7-8":3}},events:[audit],exposures:[{factId:"mul-7-8",at:100}]};
+  await cloud.syncCloudProgress(client,"student","owner",{states:{},automaticity:auto,sessions:[{id:"done",operation:"mul",attempts:[{id:"attempt",fact:"7 × 8",operation:"mul",answerCorrect:true,responseMs:2400,audit}]}]});
+  const loaded=await cloud.loadCloudProgress(client,"student");
+  assert.equal(JSON.stringify(loaded.automaticity),JSON.stringify(auto));
+  assert.equal(JSON.stringify(loaded.sessions[0].attempts[0].audit),JSON.stringify(audit));
+  assert.equal(loaded.sessions[0].attempts[0].answerCorrect,true);
 });

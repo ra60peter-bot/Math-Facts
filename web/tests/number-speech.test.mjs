@@ -21,6 +21,7 @@ async function harness({ pendingPermission = false, autoReveal = true } = {}) {
     terminate() {}
     KaldiRecognizer = class {
       handlers = {};
+      // eslint-disable-next-line @typescript-eslint/no-this-alias -- expose the mock decoder to the test
       constructor(rate, grammar) {decoder = this; this.grammar = grammar;}
       on(event, cb) {this.handlers[event] = cb;}
       setWords(enabled) {this.words = enabled;}
@@ -43,6 +44,7 @@ async function harness({ pendingPermission = false, autoReveal = true } = {}) {
       createMediaStreamSource() {return {connect() {},disconnect() {}};}
     },
     AudioWorkletNode: class {
+      // eslint-disable-next-line @typescript-eslint/no-this-alias -- expose the mock capture node to the test
       constructor() {capture = this;}
       port = {onmessage: null, postMessage: data => events.push(data), close() {}};
       connect() {} disconnect() {}

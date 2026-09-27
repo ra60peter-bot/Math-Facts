@@ -2,6 +2,18 @@
 
 Updated September 27, 2026. Read this before continuing work.
 
+### Adaptive automaticity scheduler (current)
+
+The explicit user-supplied scheduler replaces the fixed FSRS queue and average-based mastery display. Read `web/AUTOMATICITY.md` for behavior, migration, validation and limitations. Shared engine is `web/lib/automaticity.ts`; all product defaults in `web/lib/automaticity-config.ts`. First-answer unassisted correctness within **1,500 ms inclusive** is the target; preserve the separate existing four-second answer window. Dynamic 7-training/3-check allocation, explicit spacing AND unrelated completions, five-attempt session cap, ten-active-prompt pool, shuffled unseen coverage, cold priming/family guards, 1/2/4/7/14/30-day ladder and four-success/seven-day verification are implemented. Reversals share interference only, not achievement.
+
+The purple/gold bar now shows the proportion of SELECTED facts currently verified on later cold checks (0–1,000). Old mastery badges/counts are retained as historical data, not imported as proof of automaticity. Existing decks unchanged: addition 81, subtraction 45, multiplication 121. Existing accounts, voice parsers/decoders and onset measurement preserved. Correct slow feedback is neutral. Correction after an initial wrong answer no longer grants successful first-answer credit. Full silent captured window scores a timeout; technical recognition failures remain ungraded exposures.
+
+Migration `008_automaticity_scheduler.sql` was applied to production Supabase and both JSONB columns verified: `students.automaticity`, `attempts.automaticity_audit`. Existing RLS/records untouched. Snapshot persists event/exposure audit and resumable session caps/allocation/retry state in existing local/cloud progress. Reload offers Resume or End saved session. Repeat starts a genuinely new session; unavailable queues end explicitly with a spacing explanation. The canceled history-deletion/recalculation request remains canceled: deleting visible sessions retains learned state.
+
+Validation: 107 tests pass, ESLint passes, TypeScript passes, production build succeeds. Temporary local UI fixture verified ten fast initial assessments → VERIFYING with zero cold credits, Repeat, wrong-answer feedback, reload/resume and early-exit history. Fixture removed. Browser tests used simulated transcripts, not live microphone claims. Build used bundled Node directly (npm is not on this machine's PATH), including the number-model preparation step.
+
+Limitations: one learner should practice on one device at a time; existing snapshot sync does not merge concurrent devices. Offline work requires upload before switching devices. Audit snapshot grows with usage; no archival/compaction yet. Stored initial device timezone has no new timezone-editing UI. See `web/AUTOMATICITY.md` for assumptions about recent-answer priming and silent-window classification. Earlier sections below describe superseded scheduler/scoring behavior where they conflict with this section.
+
 ### Repeat completed practice session
 
 Session complete now has a primary Repeat button beside New session and View history. Calls the existing startPractice handler with the retained student, operation, selected facts, question count, and speech mode. Starts a fresh session/attempt list and builds a new queue using current learning state; identical configuration does not mean replaying the same question order. New session still opens setup.

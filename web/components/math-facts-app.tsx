@@ -3,9 +3,10 @@
 import { FormEvent, Fragment, useCallback, useEffect, useId, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import type { User } from "@supabase/supabase-js";
-import { FactCard, answerFor, buildQueue, insertRetry, makeCards } from "../lib/cards";
-import { loadCloudProgress, loadVoiceMappings, saveVoiceMapping, syncCloudProgress, queueProgressWrite, rememberUploadedSessions } from "../lib/cloud-progress";
-import { reviewCardState } from "../lib/fsrs-scheduler";
+import { FactCard, answerFor, makeCards } from "../lib/cards";
+import { loadCloudProgress, loadVoiceMappings, saveVoiceMapping, syncCloudProgress, queueProgressWrite, rememberUploadedSessions, mergePendingSessions } from "../lib/cloud-progress";
+import { AUTOMATICITY_CONFIG } from "../lib/automaticity-config";
+import { createAutomaticProgress, startAutomaticSession, resumeAutomaticSession, endAutomaticSession, selectNextQuestion, presentQuestion, applyAttemptResult, beginAnswerExposure, endAnswerExposure, getProgressSummary, stageLabels, type AutomaticProgress, type AttemptEvent, type Selection } from "../lib/automaticity";
 import { LocalSpeechStatus, prepareLocalSpeech } from "../lib/local-speech";
 import type { BrowserSpeechRecognition, BrowserSpeechRecognitionEvent, BrowserSpeechRecognitionErrorEvent } from "../lib/browser-speech";
 import { SPEECH_RESULT_GRACE_MS } from "../lib/browser-speech";
@@ -14,15 +15,15 @@ import { SpeechTest } from "./speech-test";
 import { MasteryProgress } from "./mastery-progress";
 import { NumberSpeechRecognition, prepareNumberSpeech } from "../lib/number-speech";
 import { HistorySort, historyResult, sortHistoryAttempts } from "../lib/history-sort";
-import { CardState, Grade, Operation, TIMEOUT_MS, defaultState, gradeResponse, masteryScore } from "../lib/learning";
-import { normalizeSpokenPhrase, parseSpokenNumber } from "../lib/number-parser";
+import { CardState, Operation, TIMEOUT_MS, defaultState, updateCardState } from "../lib/learning";
+import { parseSpokenNumber } from "../lib/number-parser";
 import { hasSupabaseConfig, supabaseBrowser } from "../lib/supabase-browser";
 
 type View = "practice" | "history" | "students" | "users";
 type Phase = "setup" | "practice" | "results";
-type Attempt = { id: string; fact: string; operation: Operation; correct: boolean; answerCorrect: boolean; responseMs: number; heard: string; at: string };
+type Attempt = { id: string; fact: string; operation: Operation; correct: boolean; answerCorrect: boolean; responseMs: number; heard: string; at: string; audit?: AttemptEvent };
 type SavedSession = { id: string; operation: Operation; startedAt: string; endedAt: string; attempts: Attempt[] };
-type Persisted = { states: Record<string, CardState>; sessions: SavedSession[] };
+type Persisted = { states: Record<string, CardState>; sessions: SavedSession[]; automaticity?: AutomaticProgress | null };
 type PendingWrong = { card: FactCard; transcript: string; responseMs: number; attemptId: string; previousState: CardState };
 type AccountRole = "admin" | "user";
 type AccountProfile = { id: string; email: string; displayName: string | null; role: AccountRole; status: "active" | "blocked" };
@@ -68,6 +69,7 @@ function readProgress(ownerId: string): Persisted {
     const saved = JSON.parse(stored ?? "") as Persisted;
     return {
       states: saved.states ?? {},
+      automaticity: saved.automaticity ?? null,
       sessions: (saved.sessions ?? []).map((session) => ({
         ...session,
         attempts: session.attempts.map((attempt) => {
@@ -253,7 +255,15 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     sub: new Set(makeCards("sub").map((card) => card.id)),
     mul: new Set(makeCards("mul").map((card) => card.id)),
   }));
-  const [states, setStates] = useState<Record<string, CardState>>({});
+  const [automaticity, setAutomaticity] = useState<AutomaticProgress | null>(null);
+  const automaticityRef = useRef<AutomaticProgress | null>(null);
+  const [progressReady, setProgressReady] = useState(false);
+  const [syncMessage, setSyncMessage] = useState("");
+  const [sessionNotice, setSessionNotice] = useState("");
+  const selectionRef = useRef<Extract<Selection, { kind: "question" }> | null>(null);
+  const recordPresentationRef = useRef<() => void>(() => undefined);
+  const recordInvalidRef = useRef<(reason: string) => void>(() => undefined);
+  const [, setStates] = useState<Record<string, CardState>>({});
   const [sessions, setSessions] = useState<SavedSession[]>([]);
   const [current, setCurrent] = useState<FactCard | null>(null);
   const [progress, setProgress] = useState(0);
@@ -329,9 +339,6 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
 
   const statesRef = useRef<Record<string, CardState>>({});
   const voiceMappingsRef = useRef<Record<string, number>>({});
-  const queueRef = useRef<FactCard[]>([]);
-  const indexRef = useRef(0);
-  const sessionStartedAtRef = useRef("");
   const attemptsRef = useRef<Attempt[]>([]);
   const questionStartRef = useRef(0);
   const soundResponseMsRef = useRef<number | null>(null);
@@ -340,7 +347,6 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
   const answerHandledRef = useRef(false);
   const timeoutRef = useRef<number | null>(null);
   const nextRef = useRef<number | null>(null);
-  const retryCountRef = useRef<Record<string, number>>({});
 
   const stopListening = useCallback(() => {
     if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
@@ -363,28 +369,42 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
   useEffect(() => {
     if (!progressOwnerId) return;
     let cancelled = false;
+    setProgressReady(false);
+    setSyncMessage("");
+    selectionRef.current = null;
     const saved = readProgress(progressOwnerId);
-    const savedMappings = readVoiceMappings(progressOwnerId);
-    statesRef.current = saved.states;
-    voiceMappingsRef.current = savedMappings;
-    setStates(saved.states);
-    setSessions(saved.sessions);
+    const restore = (loaded: Persisted) => {
+      const deck = [...makeCards("add"), ...makeCards("sub"), ...makeCards("mul")];
+      const auto = loaded.automaticity?.version === 1 && loaded.automaticity.learnerId === progressOwnerId
+        ? loaded.automaticity : createAutomaticProgress(progressOwnerId, deck, loaded.states, Intl.DateTimeFormat().resolvedOptions().timeZone);
+      automaticityRef.current = auto; setAutomaticity(auto);
+      statesRef.current = loaded.states; setStates(loaded.states); setSessions(loaded.sessions);
+      if (auto.session) {
+        setOperation(auto.session.operation); setQuestionCount(auto.session.targetCount);
+        setSelectedFacts(current => ({ ...current, [auto.session!.operation]: new Set(auto.session!.factIds) }));
+      }
+      localStorage.setItem(progressStorageKey(progressOwnerId), JSON.stringify({ ...loaded, automaticity: auto }));
+      setProgressReady(true);
+    };
+    voiceMappingsRef.current = readVoiceMappings(progressOwnerId);
+    const savedMappings = voiceMappingsRef.current;
     const client = supabaseBrowser();
-    if (client && cloudUser) {
+    if (client && cloudUser && navigator.onLine) {
       loadCloudProgress(client, progressOwnerId).then((cloud) => {
-        if (cancelled || !cloud || (!Object.keys(cloud.states).length && !cloud.sessions.length)) return;
-        statesRef.current = cloud.states;
-        setStates(cloud.states);
-        setSessions(cloud.sessions);
-        localStorage.setItem(progressStorageKey(progressOwnerId), JSON.stringify(cloud));
-      }).catch(() => undefined);
+        if (cancelled) return;
+        if (!cloud) throw new Error("Progress could not be loaded.");
+        // Local, not-yet-uploaded work survives reload/offline reconnection.
+        const useLocal = saved.automaticity && (!cloud.automaticity || saved.automaticity.updatedAt > cloud.automaticity.updatedAt);
+        restore(useLocal ? { ...saved, sessions: mergePendingSessions(progressOwnerId, saved.sessions, cloud.sessions) } : cloud);
+      }).catch((error) => { if (!cancelled) { setSyncMessage(error instanceof Error ? error.message : "Progress could not be loaded."); } });
       loadVoiceMappings(client, progressOwnerId).then((cloudMappings) => {
         if (cancelled) return;
         const merged = { ...cloudMappings, ...savedMappings };
         voiceMappingsRef.current = merged;
         localStorage.setItem(voiceMappingsStorageKey(progressOwnerId), JSON.stringify(merged));
       }).catch(() => undefined);
-    }
+    } else if (!cloudUser || saved.automaticity) restore(saved);
+    else setSyncMessage("Connect to load this student's progress before practicing.");
     const Recognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
     setSpeechSupported(Boolean(Recognition));
     if ("serviceWorker" in navigator) {
@@ -404,7 +424,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
         }).catch(() => undefined);
       }
     }
-    return () => { cancelled = true; stopListening(); };
+    return () => { cancelled = true; stopListening(); if (nextRef.current !== null) window.clearTimeout(nextRef.current); };
   }, [cloudUser, progressOwnerId, stopListening]);
 
   const saveProgress = useCallback((nextStates: Record<string, CardState>, nextSessions: SavedSession[]) => {
@@ -412,11 +432,11 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     statesRef.current = nextStates;
     setStates(nextStates);
     setSessions(nextSessions);
-    localStorage.setItem(progressStorageKey(progressOwnerId), JSON.stringify({ states: nextStates, sessions: nextSessions }));
+    localStorage.setItem(progressStorageKey(progressOwnerId), JSON.stringify({ states: nextStates, sessions: nextSessions, automaticity: automaticityRef.current }));
     const client = supabaseBrowser();
     if (client && cloudUser && navigator.onLine) {
-      void syncCloudProgress(client, progressOwnerId, progressAccountId, { states: nextStates, sessions: nextSessions }).catch(() => undefined);
-    }
+      void syncCloudProgress(client, progressOwnerId, progressAccountId, { states: nextStates, sessions: nextSessions, automaticity: automaticityRef.current }).then(() => setSyncMessage("")).catch(() => setSyncMessage("Saved on this device. Cloud sync is pending; reconnect here before switching devices."));
+    } else if (cloudUser) setSyncMessage("Saved on this device. Cloud sync is pending; reconnect here before switching devices.");
   }, [cloudUser, progressAccountId, progressOwnerId]);
 
   useEffect(() => {
@@ -424,7 +444,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     if (!client || !cloudUser || !progressOwnerId) return;
     const syncWhenOnline = () => {
       const saved = readProgress(progressOwnerId);
-      void syncCloudProgress(client, progressOwnerId, progressAccountId, saved).catch(() => undefined);
+      void syncCloudProgress(client, progressOwnerId, progressAccountId, saved).then(() => setSyncMessage("")).catch(() => setSyncMessage("Saved on this device. Cloud sync is pending; reconnect here before switching devices."));
       const mappings = readVoiceMappings(progressOwnerId);
       void Promise.all(Object.entries(mappings).map(([phrase, answer]) => saveVoiceMapping(client, progressOwnerId, progressAccountId, phrase, answer))).catch(() => undefined);
     };
@@ -432,73 +452,93 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     return () => window.removeEventListener("online", syncWhenOnline);
   }, [cloudUser, progressAccountId, progressOwnerId]);
 
+  const persistAutomaticity = useCallback((next: AutomaticProgress) => {
+    automaticityRef.current = next;
+    setAutomaticity(next);
+    saveProgress(statesRef.current, sessions);
+  }, [saveProgress, sessions]);
+
+  const sessionRecord = (auto: AutomaticProgress): SavedSession | null => {
+    const session = auto.session;
+    if (!session) return null;
+    return { id: session.id, operation: session.operation, startedAt: new Date(session.startedAt).toISOString(), endedAt: new Date(session.endedAt ?? Date.now()).toISOString(), attempts: auto.events.filter(e => e.sessionId === session.id && e.result !== "INVALID" && e.result !== "ABANDONED").map(e => {
+      const parts = e.factId.split("-"); const op = parts[0] as Operation;
+      return { id: e.id, fact: `${parts[1]} ${operationSymbol(op)} ${parts[2]}`, operation: op, correct: e.correct, answerCorrect: e.correct, responseMs: e.responseMs, heard: e.heard, at: new Date(e.completedAt).toISOString(), audit: e };
+    }) };
+  };
+
+  const finishSession = useCallback((notice = "") => {
+    stopListening();
+    const auto = automaticityRef.current;
+    if (!auto?.session || auto.session.status === "ended") return;
+    const next = endAutomaticSession(auto);
+    automaticityRef.current = next; setAutomaticity(next);
+    const completed = sessionRecord(next)!;
+    saveProgress(statesRef.current, [completed, ...sessions.filter(s => s.id !== completed.id)]);
+    setSessionNotice(notice); setPhase("results"); setCurrent(null); selectionRef.current = null;
+  }, [saveProgress, sessions, stopListening]);
+
   const advance = useCallback(() => {
-    if (indexRef.current >= queueRef.current.length) {
-      stopListening();
-      const completed: SavedSession = {
-        id: crypto.randomUUID(),
-        operation,
-        startedAt: sessionStartedAtRef.current,
-        endedAt: new Date().toISOString(),
-        attempts: attemptsRef.current,
-      };
-      saveProgress(statesRef.current, [completed, ...sessions]);
-      setPhase("results");
-      setCurrent(null);
+    const auto = automaticityRef.current;
+    if (!auto?.session) return;
+    const prepared = endAnswerExposure(auto);
+    automaticityRef.current = prepared;
+    const enabled = makeCards(prepared.session!.operation).filter(card => prepared.session!.factIds.includes(card.id));
+    const choice = selectNextQuestion(prepared, enabled);
+    if (choice.kind === "none") {
+      finishSession(choice.reason + (choice.nextUsefulAt ? ` Next useful review: ${new Date(choice.nextUsefulAt).toLocaleString()}.` : ""));
       return;
     }
-    const next = queueRef.current[indexRef.current];
-    indexRef.current += 1;
-    answerHandledRef.current = false;
-    soundResponseMsRef.current = null;
-    questionStartRef.current = performance.now();
-    setCurrent(next);
-    setQuestionReady(false);
-    setHeard("");
-    setResult(null);
-    setPendingWrong(null);
-    nextRef.current = window.setTimeout(() => startListeningRef.current(next), 100);
-  }, [operation, saveProgress, sessions, stopListening]);
+    selectionRef.current = choice;
+    setCurrent(choice.fact); setPendingWrong(null); setQuestionReady(false); setHeard(""); setResult(null);
+    setProgress(prepared.session!.gradedCount);
+    nextRef.current = window.setTimeout(() => startListeningRef.current(choice.fact), 100);
+  }, [finishSession]);
 
-  const scheduleRetry = useCallback((card: FactCard, grade: Grade) => {
-    if ((grade !== "again" && grade !== "hard") || (retryCountRef.current[card.id] ?? 0) >= 6) return;
-    const retries = (retryCountRef.current[card.id] ?? 0) + 1;
-    retryCountRef.current[card.id] = retries;
-    const gap = Math.min((grade === "again" ? 3 : 6) + retries - 1, 12);
-    insertRetry(queueRef.current, indexRef.current, card, gap);
-  }, []);
+  useEffect(() => {
+    recordPresentationRef.current = () => {
+      const auto = automaticityRef.current, selection = selectionRef.current;
+      if (!auto || !selection || auto.session?.current) return;
+      persistAutomaticity(presentQuestion(auto, selection));
+    };
+    recordInvalidRef.current = (reason) => {
+      const auto = automaticityRef.current, presentation = auto?.session?.current;
+      if (!auto || !presentation) return;
+      persistAutomaticity(applyAttemptResult(auto, { presentationId: presentation.id, correct: false, responseMs: 0, invalid: true, heard: reason }));
+      // A technical retry is a new exposure, never a second cold check.
+      if (selectionRef.current?.attemptKind === "check") selectionRef.current = { ...selectionRef.current, attemptKind: "extra" };
+    };
+  }, [persistAutomaticity]);
 
   const handleResponse = useCallback((card: FactCard, transcript: string, parsed: number | null, responseMs: number) => {
-    if (answerHandledRef.current) return;
+    const auto = automaticityRef.current, presentation = auto?.session?.current;
+    if (answerHandledRef.current || !auto || !presentation || presentation.fact.id !== card.id) return;
     answerHandledRef.current = true;
     stopListening();
     const answerCorrect = parsed === answerFor(card);
-    const passed = answerCorrect && responseMs <= 1500;
-    const grade: Grade = gradeResponse(answerCorrect, responseMs);
+    const passed = answerCorrect && responseMs <= AUTOMATICITY_CONFIG.automaticityTargetMs;
+    let next = applyAttemptResult(auto, { presentationId: presentation.id, correct: answerCorrect, firstAnswerCorrect: answerCorrect, responseMs, timeout: parsed === null, heard: transcript });
+    if (next === auto) return;
+    const audit = next.events.at(-1)!;
+    // Legacy metrics remain available for historical views. They no longer select
+    // questions or award mastery; both fast speeds receive the same grade.
     const previousState = statesRef.current[card.id] ?? defaultState(card.id);
-    const nextState = reviewCardState(previousState, grade, responseMs);
-    const nextStates = { ...statesRef.current, [card.id]: nextState };
-    statesRef.current = nextStates;
-    setStates(nextStates);
-    setHeard(transcript || "No answer heard");
-    setListenState("");
+    const nextState = updateCardState(previousState, !answerCorrect ? "again" : passed ? "good" : "hard", responseMs);
+    statesRef.current = { ...statesRef.current, [card.id]: nextState }; setStates(statesRef.current);
+    setHeard(transcript || "No answer heard"); setListenState("");
     const elapsed = `${(responseMs / 1000).toFixed(1)} seconds`;
-    setResult(passed
-      ? { text: `Correct! ${elapsed}`, tone: "good" }
-      : answerCorrect
-        ? { text: `Slow! ${elapsed}`, tone: "slow" }
-        : { text: `Wrong! ${elapsed}`, tone: "wrong", correctAnswer: answerFor(card) });
-    const attemptId = crypto.randomUUID();
-    attemptsRef.current = [...attemptsRef.current, { id: attemptId, fact: `${card.a} ${operationSymbol(card.operation)} ${card.b}`, operation: card.operation, correct: answerCorrect, answerCorrect, responseMs, heard: transcript, at: new Date().toISOString() }];
-    setProgress(attemptsRef.current.length);
-
-    if (answerCorrect) {
-      scheduleRetry(card, grade);
-      nextRef.current = window.setTimeout(advance, passed ? 950 : 1450);
-    } else {
-      setPendingWrong({ card, transcript, responseMs, attemptId, previousState });
-    }
-  }, [advance, scheduleRetry, stopListening]);
+    setResult(passed ? { text: `Correct! Within target · ${elapsed}`, tone: "good" }
+      : answerCorrect ? { text: `Correct; needs speed practice · ${elapsed}`, tone: "slow" }
+      : { text: `Incorrect · ${elapsed}`, tone: "wrong", correctAnswer: answerFor(card) });
+    const attempt: Attempt = { id: audit.id, fact: `${card.a} ${operationSymbol(card.operation)} ${card.b}`, operation: card.operation, correct: answerCorrect, answerCorrect, responseMs, heard: transcript, at: new Date(audit.completedAt).toISOString(), audit };
+    attemptsRef.current = [...attemptsRef.current, attempt];
+    setProgress(next.session!.gradedCount);
+    if (!answerCorrect) {
+      next = beginAnswerExposure(next, card);
+      setPendingWrong({ card, transcript, responseMs, attemptId: audit.id, previousState });
+    } else nextRef.current = window.setTimeout(advance, passed ? 950 : 1450);
+    persistAutomaticity(next);
+  }, [advance, persistAutomaticity, stopListening]);
 
   const startListening = useCallback((card: FactCard) => {
     const Recognition = numberSpeechActiveRef.current ? NumberSpeechRecognition : window.SpeechRecognition ?? window.webkitSpeechRecognition;
@@ -540,6 +580,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     const fail = (message: string) => {
       if (!isActive()) return;
       log(`Not scored: ${message}`);
+      recordInvalidRef.current(message);
       setSpeechReport(trace.join("\n"));
       stopListening();
       setResult(null);
@@ -548,6 +589,12 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     const finish = () => {
       if (!isActive()) return;
       if (!latestTranscript) {
+        if (ready && drainingResult && !soundDetected && soundResponseMsRef.current === null) {
+          // Successful capture followed by the full silent answer window is a
+          // timeout. Detected speech with a missing transcript remains invalid.
+          handleResponse(card, "No answer before the deadline", null, TIMEOUT_MS);
+          return;
+        }
         const mode = numberSpeechActiveRef.current ? "Number" : recognition.processLocally ? "On-device" : "Browser";
         const detail = soundResponseMsRef.current !== null
           ? "Speech was detected, but no words were returned."
@@ -580,7 +627,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
       log("Four-second deadline: stop audio capture; wait for buffered transcript");
       setListenState("Finishing recognition…");
       timeoutRef.current = window.setTimeout(finish, SPEECH_RESULT_GRACE_MS);
-      try { recognition.stop(); } catch { finish(); }
+      try { recognition.stop(); } catch { fail("Microphone stopped unexpectedly. Tap Mic to retry. No answer was scored."); }
     };
     recognition.onstart = () => {
       if (isActive()) log("Recognition started");
@@ -600,6 +647,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
         flushSync(() => setQuestionReady(true));
         questionStartRef.current = performance.now();
         recognition.beginAnswerWindow?.(questionStartRef.current);
+        recordPresentationRef.current();
         ready = true;
         log("Question revealed; four-second timer started");
         if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
@@ -665,7 +713,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
         // answer may show Wrong; matching interim answers stay responsive.
         setResult(!correct ? null : awaitingTiming
           ? { text: "Correct!", tone: "good" }
-          : { text: `${latestResponseMs <= 1500 ? "Correct!" : "Slow!"} ${elapsed}`, tone: latestResponseMs <= 1500 ? "good" : "slow" });
+          : { text: `${latestResponseMs <= AUTOMATICITY_CONFIG.automaticityTargetMs ? "Correct!" : "Correct; needs speed practice ·"} ${elapsed}`, tone: latestResponseMs <= AUTOMATICITY_CONFIG.automaticityTargetMs ? "good" : "slow" });
         if (!correct) setListenState("Listening — finishing your answer…");
       }
     };
@@ -723,87 +771,53 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
   useEffect(() => { startListeningRef.current = startListening; }, [startListening]);
 
   const startPractice = () => {
-    if (!speechSupported) return;
-    const cards = makeCards(operation).filter((card) => selectedFacts[operation].has(card.id));
+    if (!speechSupported || !progressReady || !automaticityRef.current) return;
+    const cards = makeCards(operation).filter(card => selectedFacts[operation].has(card.id));
     if (!cards.length) return;
-    queueRef.current = buildQueue(cards, statesRef.current, questionCount);
-    indexRef.current = 0;
-    retryCountRef.current = {};
-    attemptsRef.current = [];
-    sessionStartedAtRef.current = new Date().toISOString();
-    setPhase("practice");
-    setView("practice");
-    setPendingWrong(null);
-    const first = queueRef.current[0];
-    indexRef.current = 1;
-    setProgress(0);
-    soundResponseMsRef.current = null;
-    questionStartRef.current = performance.now();
-    setCurrent(first);
-    startListening(first);
+    const previous = automaticityRef.current;
+    const next = previous.session && previous.session.status !== "ended"
+      ? resumeAutomaticSession(previous)
+      : startAutomaticSession(previous, { id: crypto.randomUUID(), operation, cards, targetCount: questionCount });
+    setOperation(next.session!.operation); setQuestionCount(next.session!.targetCount);
+    setSelectedFacts(current => ({ ...current, [next.session!.operation]: new Set(next.session!.factIds) }));
+    persistAutomaticity(next);
+    attemptsRef.current = sessionRecord(next)?.attempts ?? [];
+    setPhase("practice"); setView("practice"); setSessionNotice(""); setPendingWrong(null);
+    advance();
   };
 
   const restartRecognition = () => {
-    if (current && !answerHandledRef.current) startListening(current);
+    if (current && !answerHandledRef.current) {
+      recordInvalidRef.current("Manual recognition restart; no answer scored.");
+      startListening(current);
+    }
   };
 
   const continueAfterWrong = () => {
-    if (!pendingWrong) return;
-    scheduleRetry(pendingWrong.card, "again");
     setPendingWrong(null);
     advance();
   };
 
   const allowPendingAnswer = () => {
     if (!pendingWrong) return;
-    const phrase = normalizeSpokenPhrase(pendingWrong.transcript);
-    if (!phrase) return;
-    // Correct this attempt without teaching the recognizer that a wrong number
-    // (for example 51) should always mean a different number (50).
-    const grade = gradeResponse(true, pendingWrong.responseMs);
-    const correctedState = reviewCardState(pendingWrong.previousState, grade, pendingWrong.responseMs);
-    const nextStates = { ...statesRef.current, [pendingWrong.card.id]: correctedState };
-    statesRef.current = nextStates;
-    setStates(nextStates);
-    attemptsRef.current = attemptsRef.current.map((attempt) => attempt.id === pendingWrong.attemptId
-      ? { ...attempt, answerCorrect: true, correct: true } : attempt);
-    const fast = pendingWrong.responseMs <= 1500;
-    setResult({ text: `${fast ? "Correct!" : "Slow!"} ${(pendingWrong.responseMs / 1000).toFixed(1)} seconds`, tone: fast ? "good" : "slow" });
-    scheduleRetry(pendingWrong.card, grade);
+    // A correction after the answer was supplied is not an unassisted first
+    // retrieval. Preserve the original recorded outcome and pending practice.
+    setResult({ text: "Correction noted; the first answer still needs practice.", tone: "slow" });
     setPendingWrong(null);
     nextRef.current = window.setTimeout(advance, 800);
   };
 
   const exitPractice = () => {
-    // Ignore late speech results and cancel both feedback and microphone timers.
     answerHandledRef.current = true;
     if (nextRef.current !== null) window.clearTimeout(nextRef.current);
     nextRef.current = null;
-    stopListening();
-    if (sessionStartedAtRef.current) {
-      const completed: SavedSession = {
-        id: crypto.randomUUID(),
-        operation,
-        startedAt: sessionStartedAtRef.current,
-        endedAt: new Date().toISOString(),
-        attempts: [...attemptsRef.current],
-      };
-      saveProgress(statesRef.current, [completed, ...sessions]);
-      sessionStartedAtRef.current = "";
-    }
-    queueRef.current = [];
-    setCurrent(null);
-    setPendingWrong(null);
-    setListenState("");
-    setHeard("");
-    setResult(null);
-    setPhase("setup");
+    finishSession("Session ended early. Completed attempts and exposures were saved.");
   };
 
   const allCards = makeCards(operation);
   const selectedCount = allCards.filter((card) => selectedFacts[operation].has(card.id)).length;
-  const stateList = allCards.map((card) => states[card.id] ?? defaultState(card.id));
-  const summary = masteryScore(stateList);
+  const selectedCards = allCards.filter(card => selectedFacts[operation].has(card.id));
+  const summary = automaticity ? getProgressSummary(automaticity, selectedCards) : { total: selectedCards.length, assessed: 0, unassessed: selectedCards.length, training: 0, verifying: 0, verified: 0, due: 0, everVerified: 0, coldChecks: 0, coldCorrectPercent: null, coldAutomaticPercent: null, score: 0 };
   const currentSession = phase === "results" ? sessions[0] : null;
   const accountName = account?.email ?? localUserName;
 
@@ -884,10 +898,11 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
             </div>
           </div>
           <div className="answer-actions">
+            {!result && questionReady && automaticity?.session?.current && <button className="button secondary" onClick={() => current && handleResponse(current, "I don't know", null, Math.min(TIMEOUT_MS, Math.max(0, Math.round(performance.now() - questionStartRef.current))))}>I don’t know</button>}
             {pendingWrong && <>
               {pendingWrong?.transcript && <>
-                <p className="accept-answer-prompt">Accept “{pendingWrong.transcript}” as the correct answer?</p>
-                <button className="button secondary" onClick={allowPendingAnswer}>Yes, accept answer</button>
+                <p className="accept-answer-prompt">Was this a recognition mistake? A correction will not count as an unassisted first answer.</p>
+                <button className="button secondary" onClick={allowPendingAnswer}>Acknowledge correction</button>
               </>}
               <button className="button primary" onClick={continueAfterWrong}>{pendingWrong?.transcript ? "No, next question" : "Next question"}</button>
             </>}
@@ -914,6 +929,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     {phase === "results" && currentSession ? (
       <div className="setup">
         <h1>Session complete</h1>
+        {sessionNotice && <p className="notice">{sessionNotice}</p>}
         <p className="muted">A short, clean record of this practice round.</p>
         <div className="stats">
           <Stat label="Accuracy" value={`${Math.round((currentSession.attempts.filter((attempt) => attempt.answerCorrect).length / Math.max(currentSession.attempts.length, 1)) * 100)}%`} />
@@ -921,7 +937,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
           <Stat label="Average response time" value={currentSession.attempts.length ? `${(currentSession.attempts.reduce((sum, attempt) => sum + attempt.responseMs, 0) / currentSession.attempts.length / 1000).toFixed(1)}s` : "—"} />
         </div>
         <div className="form-row">
-          <button className="button primary" onClick={startPractice} disabled={!speechSupported || selectedCount === 0} title="Practice again with the same student, operation, selected facts, and question count">Repeat</button>
+          <button className="button primary" onClick={startPractice} disabled={!speechSupported || selectedCount === 0 || !progressReady} title="Practice again with the same student, operation, selected facts, and question count">Repeat</button>
           <button className="button secondary" onClick={() => setPhase("setup")}>New session</button>
           <button className="button secondary" onClick={() => setView("history")}>View history</button>
         </div>
@@ -959,21 +975,30 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
           </div>
           <SpeechTest key={numberSpeechActive ? "numbers" : localSpeechStatus === "ready" ? "local" : "browser"} local={localSpeechStatus === "ready"} numbers={numberSpeechActive} />
         </section>}
+        {syncMessage && <p className="notice" role="status">{syncMessage}{!progressReady && <button className="button secondary" onClick={() => window.location.reload()}>Retry loading progress</button>}</p>}
         <section className="session-settings" aria-labelledby="session-settings-title">
         <h2 id="session-settings-title">Your practice session</h2>
+        {automaticity?.session && automaticity.session.status !== "ended" && <p className="notice">An unfinished {operationLabel(automaticity.session.operation).toLowerCase()} session has {automaticity.session.gradedCount} completed answers. Resume keeps its original facts, question count, and attempt limits. <button className="button secondary" onClick={() => finishSession("Unfinished session saved. Choose New session to change its configuration.")}>End saved session</button></p>}
         <div className="form-row">
           {cloudUser && <label>Student<select value={selectedStudentId} onChange={(event) => selectStudent(event.target.value)}>{cloudStudents.map((student) => <option key={student.id} value={student.id}>{student.name}{isAdmin && student.ownerEmail ? ` — ${student.ownerEmail}` : ""}</option>)}</select></label>}
           <div className="operation-field"><span>Operation</span><div className="operation-toggle"><button aria-pressed={operation === "add"} onClick={() => setOperation("add")}>Addition</button><button aria-pressed={operation === "sub"} onClick={() => setOperation("sub")}>Subtraction</button><button aria-pressed={operation === "mul"} onClick={() => setOperation("mul")}>Multiplication</button></div></div>
           <label>Questions<select value={questionCount} onChange={(event) => setQuestionCount(Number(event.target.value))}>{QUESTION_COUNT_OPTIONS.map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
-          <button className="button primary" onClick={startPractice} disabled={!speechSupported || selectedCount === 0}>Start practice</button>
+          <button className="button primary" onClick={startPractice} disabled={!speechSupported || selectedCount === 0 || !progressReady}>{automaticity?.session && automaticity.session.status !== "ended" ? "Resume session" : "Start practice"}</button>
         </div>
-        <MasteryProgress score={summary.score} subject={operationLabel(operation)} studentName={activeStudent?.name ?? localUserName ?? "Local learner"} factCount={allCards.length} />
+        <MasteryProgress score={summary.score} subject={operationLabel(operation)} studentName={activeStudent?.name ?? localUserName ?? "Local learner"} factCount={selectedCards.length} />
         </section>
+        <div className="automaticity-summary" aria-label="Automaticity progress">
+          <p><strong>{summary.unassessed}</strong> Not assessed · <strong>{summary.training}</strong> Building speed · <strong>{summary.verifying}</strong> Fast in practice; verifying · <strong>{summary.verified}</strong> Verified automatic</p>
+          <p><strong>{summary.due}</strong> checks due · Target: correct, unassisted, within 1.5 seconds on later unprimed checks.</p>
+          <p>Cold checks correct: <strong>{summary.coldCorrectPercent === null ? "No checks yet" : summary.coldCorrectPercent + "%"}</strong> · Correct and within target: <strong>{summary.coldAutomaticPercent === null ? "No checks yet" : summary.coldAutomaticPercent + "%"}</strong> ({summary.coldChecks} checks)</p>
+          {summary.everVerified > summary.verified && <p>Previously verified; needs recheck: {summary.everVerified - summary.verified} facts.</p>}
+          <details><summary>Individual fact status</summary><div className="fact-status-list">{selectedCards.map(card => { const fact = automaticity?.facts[card.id]; return <p key={card.id}><strong>{card.a} {operationSymbol(operation)} {card.b}</strong> — {fact?.everVerifiedAutomatic && fact.stage !== "MAINTENANCE" ? "Previously verified; needs recheck" : stageLabels[fact?.stage ?? "UNASSESSED"]}{fact?.dueAt ? ` · Check ${new Date(fact.dueAt).toLocaleString()}` : ""}</p>; })}</div></details>
+        </div>
         <FactGrid operation={operation} selected={selectedFacts[operation]} onChange={(next) => setSelectedFacts((current) => ({ ...current, [operation]: next }))} />
         <div className="stats">
           <Stat label="Facts selected" value={`${selectedCount}/${allCards.length}`} />
-          <Stat label="Facts mastered" value={`${summary.mastered}/${allCards.length}`} />
-          <Stat label="Facts attempted" value={`${summary.attempted}/${allCards.length}`} />
+          <Stat label="Verified automatic" value={`${summary.verified}/${summary.total}`} />
+          <Stat label="Facts assessed" value={`${summary.assessed}/${summary.total}`} />
         </div>
       </div>
     )}

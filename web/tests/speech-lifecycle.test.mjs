@@ -28,6 +28,7 @@ function harness() {
   const timers = new Map(), answers = [], statuses = [], feedback = [], questionReady = [];
   const context = {
     useCallback: fn => fn, flushSync: fn => fn(), TIMEOUT_MS: 4000, SPEECH_RESULT_GRACE_MS: 3000,
+    AUTOMATICITY_CONFIG: {automaticityTargetMs:1500},
     navigator: { userAgent: "test browser" }, setSpeechReport() {},
     window: {
       SpeechRecognition: class { constructor() { recognizer = { start() {}, stop() {} }; return recognizer; } },
@@ -39,6 +40,7 @@ function harness() {
     questionStartRef: { current: 0 }, soundResponseMsRef: { current: null },
     answerHandledRef: { current: true }, timeoutRef: { current: null },
     recognitionRef: { current: null }, voiceMappingsRef: { current: {} },
+    recordPresentationRef: { current() {} }, recordInvalidRef: { current() {} },
     localSpeechReadyRef: { current: false }, setLocalSpeechStatus() {},
     numberSpeechActiveRef: { current: false },
     setSpeechSupported() {}, setQuestionReady(value) { questionReady.push(value); }, setHeard() {}, setResult(value) { feedback.push(value); },
@@ -190,7 +192,7 @@ test("a single syllable delayed 1.5 seconds is not discarded by the old 800ms pr
 });
 
 test("recognition processing wait is bounded and late callbacks after expiry cannot score", () => {
-  const h = harness(); h.startAudio(); h.expire(); h.expire();
+  const h = harness(); h.startAudio(); h.recognition.onspeechstart(); h.expire(); h.expire();
   assert.equal(h.context.performance.now(), 7000);
   h.clock(7100); h.result("two", true);
   assert.equal(h.answers.length, 0); assert.equal(h.context.recognitionRef.current, null);
@@ -206,13 +208,19 @@ test("failed practice reports include raw alternatives, capture deadline and end
   assert.equal(h.answers.length, 0);
 });
 
-test("empty results distinguish no sound, sound without speech, and speech without a transcript", () => {
-  for (const [event, expected] of [[null, /no microphone sound/], ["onsoundstart", /Sound was detected/], ["onspeechstart", /Speech was detected/]]) {
+test("sound or speech without a transcript is a technical invalidity", () => {
+  for (const [event, expected] of [["onsoundstart", /Sound was detected/], ["onspeechstart", /Speech was detected/]]) {
     const h = harness(); h.startAudio(); h.clock(500);
     if (event) h.recognition[event]();
     h.expire(); h.expire();
     assert.equal(h.answers.length, 0); assert.match(h.statuses.at(-1), expected);
   }
+});
+
+test("successful capture with a full silent answer window records one timeout", () => {
+  const h=harness();h.startAudio();h.expire();h.expire();
+  assert.equal(h.answers.length,1);assert.equal(h.answers[0][2],null);assert.equal(h.answers[0][3],4000);
+  h.result("eight",true);assert.equal(h.answers.length,1);
 });
 
 test("on-device deadline stops capture and allows a buffered forty result to finish", () => {
@@ -226,7 +234,7 @@ test("on-device deadline stops capture and allows a buffered forty result to fin
 
 test("on-device empty result offers retry without scoring a wrong answer", () => {
   const h = harness(); h.context.localSpeechReadyRef.current = true; h.context.listen({ id: "local" });
-  h.recognition.stop = () => {}; h.startAudio(); h.expire(); h.expire();
+  h.recognition.stop = () => {}; h.startAudio(); h.recognition.onspeechstart(); h.expire(); h.expire();
   assert.equal(h.answers.length, 0);
   assert.match(h.statuses.at(-1), /No answer was scored/);
   assert.equal(h.context.recognitionRef.current, null);
@@ -234,7 +242,7 @@ test("on-device empty result offers retry without scoring a wrong answer", () =>
 
 test("on-device end during finalization and late results do not score an empty attempt", () => {
   const h = harness(); h.context.localSpeechReadyRef.current = true; h.context.listen({ id: "local" });
-  h.recognition.stop = () => {}; h.startAudio(); h.expire(); h.recognition.onend();
+  h.recognition.stop = () => {}; h.startAudio(); h.recognition.onspeechstart(); h.expire(); h.recognition.onend();
   h.result("ten", true); assert.equal(h.answers.length, 0);
 });
 
@@ -311,7 +319,7 @@ test("empty recovery is bounded and does not extend the four-second timeout", ()
   h.recognition.onend(); h.recognition.onend(); h.recognition.onend();
   assert.equal(restarts, 2); h.expire();
   assert.equal(h.answers.length, 0); h.expire();
-  assert.match(h.statuses.at(-1), /No answer was scored/);
+  assert.equal(h.answers.length,1);assert.equal(h.answers[0][3],4000);
 });
 
 test("empty final transcript does not erase an already recognized number", () => {
@@ -472,7 +480,7 @@ test("51 and fifty-one are recognized even though they are not multiplication pr
   }
 });
 
-test("accepting a heard answer corrects the original attempt and regrades from its previous state", () => {
+test("a correction after feedback preserves the first answer and cannot award automaticity", () => {
   const begin = source.indexOf("  const allowPendingAnswer = () => {");
   const end = source.indexOf("  const exitPractice =", begin);
   const code = ts.transpileModule(source.slice(begin, end) + "\nglobalThis.accept = allowPendingAnswer;", {
@@ -492,12 +500,12 @@ test("accepting a heard answer corrects the original attempt and regrades from i
     advance() {}, window: { setTimeout: fn => { next = fn; } },
   };
   vm.runInNewContext(code, context); context.accept();
-  assert.equal(reviewed.state, before); assert.equal(reviewed.ms, 900);
+  assert.equal(reviewed, undefined);
   assert.equal(context.attemptsRef.current.length, 2);
   assert.equal(context.attemptsRef.current[0].answerCorrect, false);
-  assert.equal(context.attemptsRef.current[1].answerCorrect, true);
+  assert.equal(context.attemptsRef.current[1].answerCorrect, false);
   assert.equal(context.attemptsRef.current[1].heard, "51");
-  assert.equal(retryGrade, "easy"); assert.equal(feedback.tone, "good");
+  assert.equal(retryGrade, undefined); assert.equal(feedback.tone, "slow");
   assert.equal(next, context.advance);
 });
 test("network and permission failures do not record an answer", () => {
@@ -525,15 +533,19 @@ test("practice feedback uses the inclusive 1.5-second cutoff and correct colors"
   }).outputText;
   for (const [parsed, elapsed, label, tone] of [
     [8, 1499, "Correct!", "good"], [8, 1500, "Correct!", "good"],
-    [8, 1501, "Slow!", "slow"], [7, 700, "Wrong!", "wrong"],
-    [null, 4000, "Wrong!", "wrong"],
+    [8, 1501, "Correct; needs speed practice", "slow"], [7, 700, "Incorrect", "wrong"],
+    [null, 4000, "Incorrect", "wrong"],
   ]) {
     let feedback;
     const context = {
       useCallback: fn => fn, answerHandledRef: { current: false },
+      AUTOMATICITY_CONFIG: {automaticityTargetMs:1500},
+      automaticityRef: {current:{session:{current:{id:"presentation",fact:{id:"test"}}}}},
+      applyAttemptResult: () => ({events:[{id:"presentation",completedAt:1000}],session:{gradedCount:1}}),
+      beginAnswerExposure: p => p, persistAutomaticity() {},
       statesRef: { current: {} }, attemptsRef: { current: [] }, nextRef: { current: null },
       stopListening() {}, answerFor: () => 8, gradeResponse: () => "good",
-      defaultState: () => ({}), reviewCardState: () => ({}),
+      defaultState: () => ({}), updateCardState: () => ({}),
       setStates() {}, setHeard() {}, setListenState() {}, setProgress() {}, setPendingWrong() {},
       setResult: value => { feedback = value; }, scheduleRetry() {}, advance() {},
       window: { setTimeout() {} }, crypto: { randomUUID: () => "test" },

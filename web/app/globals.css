@@ -124,6 +124,10 @@ h2 { font-size: 20px; letter-spacing: -.02em; }
 :root[data-theme="dark"] .mastery-progress-fill { background: linear-gradient(90deg, #9867ef, #d4adff); }
 :root[data-theme="dark"] .mastery-progress-marker { border-color: #292039; }
 .grid-help { margin: 16px 0 0; color: var(--muted); font-size: 13px; }
+.automaticity-summary { margin: 20px 0; padding: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+.automaticity-summary p { margin: 6px 0; }
+.automaticity-summary summary { cursor: pointer; font-weight: 700; }
+.fact-status-list { max-height: 300px; overflow-y: auto; font-size: 14px; }
 .auth-divider { display: flex; align-items: center; gap: 12px; max-width: 420px; color: var(--muted); margin: 18px 0; }
 .auth-divider::before, .auth-divider::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
 .form-row { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; margin: 24px 0; }
