@@ -5,10 +5,11 @@ import type { SpeechPhrase, SpeechResults } from "./speech-results";
 // This bounds processing after stop(); it never extends the capture window.
 export const SPEECH_RESULT_GRACE_MS = 3000;
 
-export type BrowserSpeechRecognitionEvent = { results: SpeechResults; resultIndex?: number };
+export type BrowserSpeechRecognitionEvent = { results: SpeechResults; resultIndex?: number; speechStartedAt?: number };
 export type BrowserSpeechRecognitionErrorEvent = { error: string };
 export type BrowserSpeechRecognition = {
   processLocally?: boolean;
+  usesWordTiming?: boolean;
   phrases?: SpeechPhrase[];
   lang: string;
   continuous: boolean;

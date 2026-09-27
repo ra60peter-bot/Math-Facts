@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, Fragment, useCallback, useEffect, useId, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import type { User } from "@supabase/supabase-js";
 import { FactCard, answerFor, buildQueue, insertRetry, makeCards } from "../lib/cards";
 import { loadCloudProgress, loadVoiceMappings, saveVoiceMapping, syncCloudProgress, queueProgressWrite, rememberUploadedSessions } from "../lib/cloud-progress";
@@ -528,6 +529,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     let latestTranscript = "";
     let latestResponseMs = TIMEOUT_MS;
     let ready = false;
+    let revealScheduled = false;
     let emptyRestarts = 0;
     let drainingResult = false;
     let soundDetected = false;
@@ -556,11 +558,15 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
         fail("Words were heard, but no number was recognized. Tap Mic to retry. No answer was scored.");
         return;
       }
+      if (recognition.usesWordTiming && soundResponseMsRef.current === null) {
+        fail("The answer was heard, but its start time could not be measured. Tap Mic to retry. No answer was scored.");
+        return;
+      }
       handleResponse(card, latestTranscript, parsed, latestTranscript ? latestResponseMs : TIMEOUT_MS);
     };
     const answerDeadline = () => {
       if (!isActive()) return;
-      if (parseSpokenNumber(latestTranscript, voiceMappingsRef.current) !== null) { finish(); return; }
+      if (!recognition.usesWordTiming && parseSpokenNumber(latestTranscript, voiceMappingsRef.current) !== null) { finish(); return; }
       // Stop capturing at four seconds, but let either engine return its
       // buffered result. abort() would discard that result entirely.
       drainingResult = true;
@@ -577,14 +583,21 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
     // the question only on audiostart so a quick single syllable is not lost
     // in the gap between those two events.
     recognition.onaudiostart = () => {
-      if (!isActive() || ready) return;
-      ready = true;
-      log("Audio capture started; question revealed; four-second timer started");
-      if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
-      questionStartRef.current = performance.now();
-      setQuestionReady(true);
-      setListenState("Listening — say your answer");
-      timeoutRef.current = window.setTimeout(answerDeadline, TIMEOUT_MS);
+      if (!isActive() || ready || revealScheduled) return;
+      revealScheduled = true;
+      log("Audio capture started; waiting for question display frame");
+      window.requestAnimationFrame(() => {
+        if (!isActive() || ready) return;
+        // Commit the visible question in this display frame, rather than
+        // timing from a queued React state update or microphone startup.
+        flushSync(() => setQuestionReady(true));
+        questionStartRef.current = performance.now();
+        ready = true;
+        log("Question revealed; four-second timer started");
+        if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
+        setListenState("Listening — say your answer");
+        timeoutRef.current = window.setTimeout(answerDeadline, TIMEOUT_MS);
+      });
     };
     recognition.onsoundstart = () => {
       if (isActive() && ready && !drainingResult) { soundDetected = true; log("Sound detected"); }
@@ -611,6 +624,15 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
       // An empty browser result is not an answer. Keep listening within the
       // original deadline, and don't erase a number already heard.
       if (!transcript) return;
+      if (recognition.usesWordTiming && Number.isFinite(event.speechStartedAt)) {
+        const onset = event.speechStartedAt!;
+        if (onset < questionStartRef.current) {
+          fail("Speech began before the question appeared. Tap Mic and wait for the question. No answer was scored.");
+          return;
+        }
+        soundResponseMsRef.current = Math.min(Math.round(onset - questionStartRef.current), TIMEOUT_MS);
+        latestResponseMs = soundResponseMsRef.current;
+      }
       const sameNumber = parsedNumber !== null && parsedNumber === parseSpokenNumber(latestTranscript, voiceMappingsRef.current);
       // Keep the time already displayed when the final event merely confirms
       // the same number. A revised number gets its own arrival time.
@@ -627,7 +649,10 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
         const parsed = parseSpokenNumber(transcript, voiceMappingsRef.current);
         const correct = parsed === answerFor(card);
         const elapsed = `${(latestResponseMs / 1000).toFixed(1)} seconds`;
-        setResult(parsed === null ? null : correct
+        const awaitingTiming = recognition.usesWordTiming && soundResponseMsRef.current === null;
+        setResult(parsed === null ? null : awaitingTiming
+          ? { text: correct ? "Correct!" : "Wrong!", tone: correct ? "good" : "wrong" }
+          : correct
           ? { text: `${latestResponseMs <= 1500 ? "Correct!" : "Slow!"} ${elapsed}`, tone: latestResponseMs <= 1500 ? "good" : "slow" }
           : { text: `Wrong! ${elapsed}`, tone: "wrong" });
         if (parsed === null) setListenState("Listening — waiting for the number…");

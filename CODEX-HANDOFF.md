@@ -2,6 +2,16 @@
 
 Updated September 27, 2026. Read this before continuing work.
 
+### Number-engine response timing correction (latest)
+
+User confirms local number recognition works quickly, but every response was being scored around 0.1–0.2s. Cause: the adapter emitted `onspeechstart` on the first RMS > 0.008 audio chunk, so startup/room noise was accepted as speech. That amplitude test now indicates sound only; it cannot stop the response timer.
+
+The Vosk decoder uses `setWords(true)`. Final results supply the first non-[unk] word's start within captured audio. The worklet preserves each buffer's `currentFrame` sample position, mapped to performance.now's clock independently of delivery/decoder delays. The first spoken word's start is retained across finalized introduction segments. Practice reveals the question with flushSync inside requestAnimationFrame and starts the four-second clock in that frame. The saved response duration is spoken-word onset minus question reveal, not the end of a multiword answer or transcript arrival. This remains an estimated acoustic boundary and browser display-frame timing, not lab-grade physical display/microphone synchronization.
+
+Interim answers still show Correct!/Wrong! immediately; seconds and the final speed category appear once word timing is available. Number mode always flushes the decoder at the deadline, even with a numeric interim. Missing timing or speech that began before reveal produces an unscored retry instead of a fabricated fast time. Browser recognition retains native speech-start timing.
+
+Validation: 58 regression tests pass (frame reveal/cancellation, onset backdating, noise, delayed results, missing timing, final-buffer sample positions). Actual Vosk/WASM tests with a startup click and 0.5s versus 2s silence correctly recognized ten/eight/twenty-eight. Word onsets shifted by exactly 1.5s (ten and twenty: 0.57→2.07; eight: 0.60→2.10). Multiword timing uses twenty's onset, not eight or the end of the recording. Temporary acoustic QA route removed. User microphone accuracy/timing still needs real-use verification.
+
 ### Independent number speech engine (latest)
 
 The user's isolated-answer v3 trace detects sound/speech at 1.280s but returns NO transcript before capture stops at 4.386s or the processing allowance ends at 7.385s. The parser never receives words in this trace. This does not identify an acoustic cause inside Chrome. Further parser aliases cannot repair missing transcripts.

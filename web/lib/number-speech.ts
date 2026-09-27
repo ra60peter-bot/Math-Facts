@@ -42,6 +42,7 @@ export function prepareNumberSpeech(): Promise<void> {
 // never calls SpeechRecognition: even its microphone capture is independent.
 export class NumberSpeechRecognition implements BrowserSpeechRecognition {
   processLocally = true;
+  usesWordTiming = true;
   lang = "en-US";
   continuous = true;
   interimResults = true;
@@ -60,7 +61,9 @@ export class NumberSpeechRecognition implements BrowserSpeechRecognition {
   private source: MediaStreamAudioSourceNode | null = null;
   private capture: AudioWorkletNode | null = null;
   private decoder: KaldiRecognizer | null = null;
-  private speech = false;
+  private sound = false;
+  private audioStartedAt: number | null = null;
+  private speechStartedAt: number | null = null;
   private finalRequested = false;
   private flushTimer: number | undefined;
 
@@ -68,7 +71,9 @@ export class NumberSpeechRecognition implements BrowserSpeechRecognition {
     if (this.state === "starting" || this.state === "recording" || this.state === "draining") throw new Error("Recognition already started");
     if (!model?.ready) throw new Error("Enable number recognition first");
     this.state = "starting";
-    this.speech = false;
+    this.sound = false;
+    this.audioStartedAt = null;
+    this.speechStartedAt = null;
     this.finalRequested = false;
     this.onstart?.();
     void this.openAudio();
@@ -88,11 +93,18 @@ export class NumberSpeechRecognition implements BrowserSpeechRecognition {
       this.stream = stream;
       const decoder = new model!.KaldiRecognizer(context.sampleRate, NUMBER_GRAMMAR);
       this.decoder = decoder;
+      decoder.setWords(true);
       decoder.on("partialresult", (message) => {
         if (message.event === "partialresult" && message.result.partial) this.deliver(message.result.partial, false);
       });
       decoder.on("result", (message) => {
         if (message.event !== "result") return;
+        // Word alignment measures the beginning of the utterance in captured
+        // audio, not when decoding finishes. Ignore unrelated noise/[unk].
+        const firstWord = message.result.result?.find((word) => word.word !== "[unk]" && Number.isFinite(word.start) && word.start >= 0);
+        if (firstWord && this.audioStartedAt !== null && this.speechStartedAt === null) {
+          this.speechStartedAt = this.audioStartedAt + firstWord.start * 1000;
+        }
         if (message.result.text) this.deliver(message.result.text, true);
         if (this.state === "draining") { this.cleanup(); this.onend?.(); }
       });
@@ -100,12 +112,18 @@ export class NumberSpeechRecognition implements BrowserSpeechRecognition {
       this.source = context.createMediaStreamSource(stream);
       const capture = new AudioWorkletNode(context, "number-capture");
       this.capture = capture;
-      capture.port.onmessage = ({ data }: MessageEvent<{ samples?: Float32Array; stopped?: boolean }>) => {
+      // Map the audio sample clock to the same monotonic clock as question
+      // reveal. Worklet frame positions exclude message/decoder queue delays.
+      const audioClockOrigin = performance.now() - context.currentTime * 1000;
+      capture.port.onmessage = ({ data }: MessageEvent<{ samples?: Float32Array; startFrame?: number; stopped?: boolean }>) => {
         if (this.state !== "recording" && this.state !== "draining") return;
         if (data.samples) {
-          if (!this.speech && this.state === "recording") {
+          if (this.audioStartedAt === null && data.startFrame !== undefined) {
+            this.audioStartedAt = audioClockOrigin + data.startFrame / context.sampleRate * 1000;
+          }
+          if (!this.sound && this.state === "recording") {
             const rms = Math.sqrt(data.samples.reduce((sum, value) => sum + value * value, 0) / data.samples.length);
-            if (rms > 0.008) { this.speech = true; this.onsoundstart?.(); this.onspeechstart?.(); }
+            if (rms > 0.008) { this.sound = true; this.onsoundstart?.(); }
           }
           decoder.acceptWaveformFloat(data.samples, context.sampleRate);
         }
@@ -124,7 +142,7 @@ export class NumberSpeechRecognition implements BrowserSpeechRecognition {
 
   private deliver(transcript: string, isFinal: boolean) {
     if (this.state !== "recording" && this.state !== "draining") return;
-    this.onresult?.({ results: [{ 0: { transcript }, length: 1, isFinal }], resultIndex: 0 });
+    this.onresult?.({ results: [{ 0: { transcript }, length: 1, isFinal }], resultIndex: 0, speechStartedAt: this.speechStartedAt ?? undefined });
   }
   stop() {
     if (this.state !== "recording") { if (this.state === "starting") { this.cleanup(); this.onend?.(); } return; }

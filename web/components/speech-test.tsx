@@ -81,6 +81,7 @@ export function SpeechTest({ local, numbers = false }: { local: boolean; numbers
       const selected = readNumberResult(event.results);
       setHeard(`Heard: “${selected.transcript}” → ${selected.value ?? "not a single number"}`);
       log(`Combined: ${JSON.stringify(selected.transcript)} → ${selected.value ?? "not a single number"}`);
+      if (event.speechStartedAt !== undefined) log(`Spoken-word onset: ${((event.speechStartedAt - began) / 1000).toFixed(3)}s after test start (not transcript delivery time)`);
       for (let i = event.resultIndex ?? 0; i < event.results.length; i += 1) {
         const result = event.results[i];
         for (let j = 0; j < result.length; j += 1) {

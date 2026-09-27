@@ -27,12 +27,13 @@ function harness() {
   let now = 0, id = 0, recognizer;
   const timers = new Map(), answers = [], statuses = [], feedback = [], questionReady = [];
   const context = {
-    useCallback: fn => fn, TIMEOUT_MS: 4000, SPEECH_RESULT_GRACE_MS: 3000,
+    useCallback: fn => fn, flushSync: fn => fn(), TIMEOUT_MS: 4000, SPEECH_RESULT_GRACE_MS: 3000,
     navigator: { userAgent: "test browser" }, setSpeechReport() {},
     window: {
       SpeechRecognition: class { constructor() { recognizer = { start() {}, stop() {} }; return recognizer; } },
       setTimeout(fn, delay) { timers.set(++id, { fn, at: now + delay }); return id; },
       clearTimeout: key => timers.delete(key),
+      requestAnimationFrame: fn => fn(),
     },
     performance: { now: () => now },
     questionStartRef: { current: 0 }, soundResponseMsRef: { current: null },
@@ -85,6 +86,51 @@ test("startup delay does not consume the four-second answer window", () => {
   const h = harness(); h.clock(1800); h.startAudio();
   assert.equal(h.context.questionStartRef.current, 1800);
   h.clock(2000); h.result("six"); h.expire(); assert.equal(h.answers[0][3], 200);
+});
+
+test("question timer begins in the reveal frame, and cancelled frames cannot reveal a stale question", () => {
+  const h = harness(); let reveal;
+  h.context.window.requestAnimationFrame = fn => { reveal = fn; };
+  h.clock(300); h.startAudio();
+  assert.equal(h.questionReady.at(-1), false);
+  h.clock(550); reveal();
+  assert.equal(h.questionReady.at(-1), true);
+  assert.equal(h.context.questionStartRef.current, 550);
+  h.clock(1750); h.recognition.onspeechstart(); h.result("twenty eight", true);
+  assert.equal(h.answers[0][3], 1200);
+  h.context.listen({id:"cancelled"}); h.startAudio(); h.context.stopListening();
+  h.clock(1900); reveal(); assert.equal(h.questionReady.at(-1), false);
+});
+
+test("number engine scores word onset, not startup noise or delayed transcript arrival", () => {
+  const h = harness(); h.recognition.usesWordTiming = true;
+  h.clock(1000); h.startAudio();
+  h.clock(1100); h.recognition.onsoundstart();
+  h.clock(3500); h.result("twenty seven");
+  assert.equal(h.feedback.at(-1).text, "Wrong!");
+  assert.equal(h.answers.length, 0);
+  h.clock(4200);
+  h.recognition.onresult({results:[{0:{transcript:"twenty seven"},length:1,isFinal:true}],speechStartedAt:2700});
+  assert.equal(h.answers[0][3],1700);
+});
+
+test("number engine flushes timing at deadline even with an interim number", () => {
+  const h = harness(); h.recognition.usesWordTiming = true; let stops = 0;
+  h.recognition.stop = () => {stops++;}; h.startAudio();
+  h.clock(3900); h.result("twenty eight"); h.expire();
+  assert.equal(stops,1); assert.equal(h.answers.length,0);
+  h.clock(4600);
+  h.recognition.onresult({results:[{0:{transcript:"twenty eight"},length:1,isFinal:true}],speechStartedAt:3100});
+  assert.equal(h.answers[0][3],3100);
+});
+
+test("missing word timing or pre-question speech cannot create a falsely fast score", () => {
+  for (const onset of [undefined, 900]) {
+    const h = harness(); h.recognition.usesWordTiming = true;
+    h.clock(1000); h.startAudio(); h.clock(2000);
+    h.recognition.onresult({results:[{0:{transcript:"two"},length:1,isFinal:true}],speechStartedAt:onset});
+    assert.equal(h.answers.length,0); assert.match(h.statuses.at(-1), /No answer was scored/);
+  }
 });
 
 test("both engines wait for audio capture before revealing the question or timing a short answer", () => {
