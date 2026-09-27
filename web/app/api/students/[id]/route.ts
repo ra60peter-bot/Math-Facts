@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAccount } from "../../../../lib/admin-server";
-import { verifyAccountPassword } from "../../../../lib/verify-account-password";
 
 export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireAccount(request);
@@ -15,14 +14,6 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
   if (auth.role !== "admin" && student.owner_id !== auth.user.id) {
     return NextResponse.json({ error: "You can only delete students belonging to your account." }, { status: 403 });
   }
-
-  const body = await request.json().catch(() => null);
-  const password = body?.password;
-  if (typeof password !== "string" || !password.trim() || password.length > 1024) {
-    return NextResponse.json({ error: "Enter your Math Facts password to delete this student." }, { status: 400 });
-  }
-  const verification = await verifyAccountPassword(auth.user, password);
-  if (!verification.ok) return NextResponse.json({ error: verification.error }, { status: verification.status });
 
   const { error } = await auth.service.from("students").delete().eq("id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });

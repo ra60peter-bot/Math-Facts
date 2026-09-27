@@ -13,8 +13,8 @@ export default function InviteCallback() {
     const client = supabaseBrowser();
     if (!client) { setMessage("Supabase has not been configured."); return; }
     client.auth.getSession().then(({ data }) => {
-      if (data.session) { setReady(true); setMessage("Choose a Math Facts password. You will also use it to confirm student deletion."); }
-      else setMessage("This invitation or password reset link is invalid or has expired.");
+      if (data.session) { setReady(true); setMessage("Choose a password to finish joining."); }
+      else setMessage("This invitation link is invalid or has expired.");
     });
   }, []);
   async function submit(event: FormEvent) {
@@ -26,5 +26,5 @@ export default function InviteCallback() {
     router.push("/");
     router.refresh();
   }
-  return <main className="main"><div className="setup"><h1>Set your Math Facts password</h1><p className="muted">{message}</p>{ready && <form className="form-row" onSubmit={submit}><label>New password<input type="password" autoComplete="new-password" required minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} /></label><button className="button primary">Save password</button></form>}</div></main>;
+  return <main className="main"><div className="setup"><h1>Join Math Facts</h1><p className="muted">{message}</p>{ready && <form className="form-row" onSubmit={submit}><label>Password<input type="password" required minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} /></label><button className="button primary">Finish setup</button></form>}</div></main>;
 }

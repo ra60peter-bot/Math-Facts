@@ -11,7 +11,6 @@ import type { BrowserSpeechRecognition, BrowserSpeechRecognitionEvent, BrowserSp
 import { SPEECH_RESULT_GRACE_MS } from "../lib/browser-speech";
 import { addNumberHints, readNumberResult } from "../lib/speech-results";
 import { SpeechTest } from "./speech-test";
-import { DeleteStudentButton } from "./delete-student-button";
 import { NumberSpeechRecognition, prepareNumberSpeech } from "../lib/number-speech";
 import { HistorySort, historyResult, sortHistoryAttempts } from "../lib/history-sort";
 import { CardState, Grade, Operation, TIMEOUT_MS, defaultState, gradeResponse, masteryScore } from "../lib/learning";
@@ -1024,6 +1023,7 @@ function AxisToggle({ label, keys, selected, onToggle }: { label: string; keys: 
 function StudentManagement({ students, activeStudentId, accountId, onSelectStudent, onChanged }: { students: StudentProfile[]; activeStudentId: string; accountId: string; onSelectStudent: (studentId: string) => void; onChanged: () => Promise<void> }) {
   const [name, setName] = useState("");
   const [message, setMessage] = useState("");
+  const [pendingDeleteId, setPendingDeleteId] = useState("");
 
   async function addStudent(event: FormEvent) {
     event.preventDefault();
@@ -1038,13 +1038,18 @@ function StudentManagement({ students, activeStudentId, accountId, onSelectStude
     }
   }
 
-  async function deleteStudent(student: StudentProfile, password: string) {
-    await accountRequest(`/api/students/${student.id}`, { method: "DELETE", body: JSON.stringify({ password }) });
-    setMessage(`${student.name} and all associated progress were deleted.`);
-    await onChanged();
+  async function deleteStudent(student: StudentProfile) {
+    try {
+      await accountRequest(`/api/students/${student.id}`, { method: "DELETE" });
+      setPendingDeleteId("");
+      setMessage(`${student.name} and all associated progress were deleted.`);
+      await onChanged();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "The student could not be deleted.");
+    }
   }
 
-  return <div className="users-view"><div className="topbar"><div><h1>Students</h1><p className="muted">Account owners create and remove student profiles. Students select their name before practicing.</p></div></div><section className="user-toolbar"><h2>Add student</h2><form className="form-row" onSubmit={addStudent}><label>Name<input type="text" required maxLength={60} value={name} onChange={(event) => setName(event.target.value)} /></label><button className="button primary">Add student</button></form>{message && <p className="notice">{message}</p>}</section><section><h2>Student profiles</h2>{students.length === 0 ? <p className="empty">No students yet.</p> : <div className="table-scroll"><table className="history-table"><thead><tr><th>Student</th><th>Account</th><th>Added</th><th>Actions</th></tr></thead><tbody>{students.map((student) => <tr key={student.id}><td><strong>{student.name}</strong>{student.id === activeStudentId && <span className="role-label">Selected</span>}</td><td>{student.ownerEmail ?? "This account"}</td><td>{new Date(student.createdAt).toLocaleDateString()}</td><td><div className="table-actions">{student.id !== activeStudentId && <button className="button primary" onClick={() => onSelectStudent(student.id)}>Select</button>}<DeleteStudentButton student={student} onDelete={(password) => deleteStudent(student, password)} /></div></td></tr>)}</tbody></table></div>}</section></div>;
+  return <div className="users-view"><div className="topbar"><div><h1>Students</h1><p className="muted">Account owners create and remove student profiles. Students select their name before practicing.</p></div></div><section className="user-toolbar"><h2>Add student</h2><form className="form-row" onSubmit={addStudent}><label>Name<input type="text" required maxLength={60} value={name} onChange={(event) => setName(event.target.value)} /></label><button className="button primary">Add student</button></form>{message && <p className="notice">{message}</p>}</section><section><h2>Student profiles</h2>{students.length === 0 ? <p className="empty">No students yet.</p> : <div className="table-scroll"><table className="history-table"><thead><tr><th>Student</th><th>Account</th><th>Added</th><th>Actions</th></tr></thead><tbody>{students.map((student) => <tr key={student.id}><td><strong>{student.name}</strong>{student.id === activeStudentId && <span className="role-label">Selected</span>}</td><td>{student.ownerEmail ?? "This account"}</td><td>{new Date(student.createdAt).toLocaleDateString()}</td><td><div className="table-actions">{student.id !== activeStudentId && <button className="button primary" onClick={() => onSelectStudent(student.id)}>Select</button>}{pendingDeleteId === student.id ? <><button className="button secondary" onClick={() => setPendingDeleteId("")}>Cancel</button><button className="button danger" onClick={() => void deleteStudent(student)}>Confirm delete</button></> : <button className="button danger" onClick={() => setPendingDeleteId(student.id)}>Delete</button>}</div></td></tr>)}</tbody></table></div>}</section></div>;
 }
 
 function LocalUserManagement({ users, activeUserId, onAddUser, onDeleteUser, onSelectUser }: { users: LocalUser[]; activeUserId: string; onAddUser: (name: string) => void; onDeleteUser: (userId: string) => void; onSelectUser: (userId: string) => void }) {
@@ -1219,17 +1224,22 @@ function UserManagement({ currentUserId }: { currentUserId: string }) {
     }
   }
 
-  async function deleteStudent(student: ManagedStudent, password: string) {
-    await accountRequest(`/api/students/${student.id}`, { method: "DELETE", body: JSON.stringify({ password }) });
-    setMessage(`${student.name} was deleted.`);
-    setSelectedStudentId("");
-    await loadUsers();
+  async function deleteStudent(student: ManagedStudent) {
+    if (!window.confirm(`Permanently delete ${student.name} and all associated practice history?`)) return;
+    try {
+      await accountRequest(`/api/students/${student.id}`, { method: "DELETE" });
+      setMessage(`${student.name} was deleted.`);
+      setSelectedStudentId("");
+      await loadUsers();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "The student could not be deleted.");
+    }
   }
 
   return <div className="users-view"><div className="topbar"><div><h1>Admin</h1><p className="muted">Invite account owners, manage every student, and review all performance.</p></div></div><section className="user-toolbar"><h2>Invite user</h2><form className="form-row" onSubmit={invite}><label>Email<input type="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></label><button className="button primary">Send invitation</button></form>{message && <p className="notice">{message}</p>}</section><section><h2>Accounts</h2>{loading ? <p className="empty">Loading users...</p> : users.length === 0 ? <p className="empty">No users found.</p> : <div className="table-scroll"><table className="history-table"><thead><tr><th>User</th><th>Status</th><th>Students</th><th>Sessions</th><th>Actions</th></tr></thead><tbody>{users.map((user) => {
     const allSessions = user.students.flatMap((student) => student.sessions);
     return <tr key={user.id}><td><strong>{user.displayName || user.email}</strong>{user.role === "admin" && <span className="role-label">Admin</span>}<br /><span className="muted">{user.email}</span></td><td>{user.status}</td><td>{user.students.length}</td><td>{allSessions.length}</td><td><div className="table-actions"><button className="button secondary" onClick={() => { setSelectedUserId(user.id); setSelectedStudentId(""); }}>Manage</button>{user.role !== "admin" && user.id !== currentUserId && <button className="button danger" onClick={() => void deleteUser(user)}>Delete user</button>}</div></td></tr>;
-  })}</tbody></table></div>}</section>{selectedUser && <section className="user-history"><h2>{selectedUser.displayName || selectedUser.email} students</h2><form className="form-row" onSubmit={addStudent}><label>Student name<input type="text" required maxLength={60} value={studentName} onChange={(event) => setStudentName(event.target.value)} /></label><button className="button primary">Add student</button></form>{selectedUser.students.length === 0 ? <p className="empty">No students yet.</p> : <div className="table-scroll"><table className="history-table"><thead><tr><th>Student</th><th>Added</th><th>Sessions</th><th>Actions</th></tr></thead><tbody>{selectedUser.students.map((student) => <tr key={student.id}><td><strong>{student.name}</strong></td><td>{new Date(student.createdAt).toLocaleDateString()}</td><td>{student.sessions.length}</td><td><div className="table-actions"><button className="button secondary" onClick={() => setSelectedStudentId(student.id)}>View history</button><DeleteStudentButton student={student} onDelete={(password) => deleteStudent(student, password)} /></div></td></tr>)}</tbody></table></div>}{selectedStudent && <div className="user-history"><h2>{selectedStudent.name} history</h2><AdminSessionHistory sessions={selectedStudent.sessions} /></div>}</section>}</div>;
+  })}</tbody></table></div>}</section>{selectedUser && <section className="user-history"><h2>{selectedUser.displayName || selectedUser.email} students</h2><form className="form-row" onSubmit={addStudent}><label>Student name<input type="text" required maxLength={60} value={studentName} onChange={(event) => setStudentName(event.target.value)} /></label><button className="button primary">Add student</button></form>{selectedUser.students.length === 0 ? <p className="empty">No students yet.</p> : <div className="table-scroll"><table className="history-table"><thead><tr><th>Student</th><th>Added</th><th>Sessions</th><th>Actions</th></tr></thead><tbody>{selectedUser.students.map((student) => <tr key={student.id}><td><strong>{student.name}</strong></td><td>{new Date(student.createdAt).toLocaleDateString()}</td><td>{student.sessions.length}</td><td><div className="table-actions"><button className="button secondary" onClick={() => setSelectedStudentId(student.id)}>View history</button><button className="button danger" onClick={() => void deleteStudent(student)}>Delete student</button></div></td></tr>)}</tbody></table></div>}{selectedStudent && <div className="user-history"><h2>{selectedStudent.name} history</h2><AdminSessionHistory sessions={selectedStudent.sessions} /></div>}</section>}</div>;
 }
 
 function AdminSessionHistory({ sessions }: { sessions: AdminSessionSummary[] }) {
