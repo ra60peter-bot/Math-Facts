@@ -29,7 +29,7 @@ export type CardState = {
   fsrs: FsrsCardState | null;
 };
 
-export const FAST_MS = 950;
+export const FAST_MS = 1200;
 export const TARGET_MS = 1500;
 export const TIMEOUT_MS = 4000;
 
