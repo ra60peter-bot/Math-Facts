@@ -124,13 +124,24 @@ test("number engine flushes timing at deadline even with an interim number", () 
   assert.equal(h.answers[0][3],3100);
 });
 
-test("missing word timing or pre-question speech cannot create a falsely fast score", () => {
-  for (const onset of [undefined, 900]) {
+test("missing word timing cannot create a falsely fast score", () => {
+  for (const onset of [undefined]) {
     const h = harness(); h.recognition.usesWordTiming = true;
     h.clock(1000); h.startAudio(); h.clock(2000);
     h.recognition.onresult({results:[{0:{transcript:"two"},length:1,isFinal:true}],speechStartedAt:onset});
     assert.equal(h.answers.length,0); assert.match(h.statuses.at(-1), /No answer was scored/);
   }
+});
+
+test("132 is accepted even if a decoder boundary is estimated before reveal", () => {
+  const h=harness();h.recognition.usesWordTiming=true;h.context.answerFor=()=>132;
+  let windowStart=null;h.recognition.beginAnswerWindow=at=>windowStart=at;
+  h.clock(1000);h.startAudio();assert.equal(windowStart,1000);
+  h.clock(2600);
+  h.recognition.onresult({results:[{0:{transcript:"one thirty two"},length:1,isFinal:true}],speechStartedAt:990});
+  assert.equal(h.answers.length,1);assert.equal(h.answers[0][2],132);
+  assert.equal(h.answers[0][3],1600);
+  assert.ok(!h.statuses.some(status=>status.includes("before the question")));
 });
 
 test("both engines wait for audio capture before revealing the question or timing a short answer", () => {

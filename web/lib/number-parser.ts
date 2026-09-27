@@ -17,7 +17,7 @@ function underHundredToWords(value: number) {
 }
 
 export function numberToPhrases(value: number) {
-  if (value < 0 || value > 225) return [];
+  if (!Number.isInteger(value) || value < 0 || value > 225) return [];
   if (value < 100) {
     return value === 0 ? [underHundredToWords(value), "oh"] : [underHundredToWords(value)];
   }
@@ -25,16 +25,17 @@ export function numberToPhrases(value: number) {
   const hundreds = Math.floor(value / 100);
   const remainder = value % 100;
   const prefix = `${ones[hundreds]} hundred`;
-  if (remainder === 0) return hundreds === 1 ? [prefix, "hundred"] : [prefix];
-
-  const remainderWords = underHundredToWords(remainder);
-  const phrases = [`${prefix} ${remainderWords}`];
-  if (hundreds === 1) {
-    phrases.push(`hundred ${remainderWords}`);
-    if (remainder < 10) phrases.push(`one oh ${remainderWords}`, `one o ${remainderWords}`);
-    else phrases.push(`one ${remainderWords}`);
+  const prefixes = hundreds === 1 ? [prefix, "hundred", "a hundred"] : [prefix];
+  const phrases = remainder === 0 ? [...prefixes] : prefixes.flatMap((hundred) => [
+    `${hundred} ${underHundredToWords(remainder)}`, `${hundred} and ${underHundredToWords(remainder)}`,
+  ]);
+  if (remainder > 0) {
+    if (remainder < 10) phrases.push(`${ones[hundreds]} oh ${ones[remainder]}`, `${ones[hundreds]} o ${ones[remainder]}`);
+    else phrases.push(`${ones[hundreds]} ${underHundredToWords(remainder)}`);
   }
-  return phrases;
+  // Three-digit readings: one three two, one one two, one two one, etc.
+  phrases.push(String(value).split("").map((digit) => ones[Number(digit)]).join(" "));
+  return phrases.filter((phrase, index) => phrases.indexOf(phrase) === index);
 }
 
 const phraseToNumber: Record<string, number> = {};
@@ -70,6 +71,12 @@ export function parseSpokenNumber(transcript: string, mappings: Record<string, n
   }
   if (cleaned in mappings) return mappings[cleaned];
   if (cleaned in phraseToNumber) return phraseToNumber[cleaned];
+
+  // Speech services mix digits and words ("one 32", "1 thirty two",
+  // "one hundred and 32"). Expand numeric tokens before the same strict
+  // phrase lookup; never extract the expected answer from arbitrary speech.
+  const expanded = cleaned.replace(/\b\d+\b/g, (digits) => numberToPhrases(Number(digits))[0] ?? digits);
+  if (expanded !== cleaned) return parseSpokenNumber(expanded, mappings);
 
   // Strip a complete answer introduction before parsing its number. This
   // also applies existing aliases ("for", "ate") to phrase endings.

@@ -68,6 +68,7 @@ export function SpeechTest({ local, numbers = false }: { local: boolean; numbers
     recognition.onaudiostart = () => {
       if (ready) return;
       ready = true;
+      recognition.beginAnswerWindow?.(performance.now());
       window.clearTimeout(timer);
       timer = window.setTimeout(stopCapture, TIMEOUT_MS);
       log("Audio capture started; four-second answer window started");

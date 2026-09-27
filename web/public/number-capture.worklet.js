@@ -6,6 +6,7 @@ class NumberCapture extends AudioWorkletProcessor {
     this.offset = 0;
     this.startFrame = 0;
     this.stopped = false;
+    this.receivedInput = false;
     this.port.onmessage = ({ data }) => {
       if (data === "stop") {
         this.stopped = true;
@@ -20,13 +21,17 @@ class NumberCapture extends AudioWorkletProcessor {
     this.port.postMessage({ samples, startFrame: this.startFrame }, [samples.buffer]);
     this.offset = 0;
   }
-  process(inputs) {
+  process(inputs, outputs) {
     if (this.stopped) return false;
     const channel = inputs[0]?.[0];
-    if (channel) {
-      for (let index = 0; index < channel.length; index++) {
+    if (channel) this.receivedInput = true;
+    // Preserve elapsed audio time across input gaps after capture begins.
+    // Otherwise word offsets compress those gaps and appear too early.
+    if (this.receivedInput) {
+      const length = channel?.length ?? outputs?.[0]?.[0]?.length ?? 128;
+      for (let index = 0; index < length; index++) {
         if (this.offset === 0) this.startFrame = currentFrame + index;
-        this.samples[this.offset++] = channel[index];
+        this.samples[this.offset++] = channel?.[index] ?? 0;
         if (this.offset === this.samples.length) this.flush();
       }
     }

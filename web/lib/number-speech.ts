@@ -63,6 +63,7 @@ export class NumberSpeechRecognition implements BrowserSpeechRecognition {
   private decoder: KaldiRecognizer | null = null;
   private sound = false;
   private audioStartedAt: number | null = null;
+  private answerWindowStart: number | null = null;
   private speechStartedAt: number | null = null;
   private finalRequested = false;
   private flushTimer: number | undefined;
@@ -73,6 +74,7 @@ export class NumberSpeechRecognition implements BrowserSpeechRecognition {
     this.state = "starting";
     this.sound = false;
     this.audioStartedAt = null;
+    this.answerWindowStart = null;
     this.speechStartedAt = null;
     this.finalRequested = false;
     this.onstart?.();
@@ -112,20 +114,29 @@ export class NumberSpeechRecognition implements BrowserSpeechRecognition {
       this.source = context.createMediaStreamSource(stream);
       const capture = new AudioWorkletNode(context, "number-capture");
       this.capture = capture;
-      // Map the audio sample clock to the same monotonic clock as question
-      // reveal. Worklet frame positions exclude message/decoder queue delays.
-      const audioClockOrigin = performance.now() - context.currentTime * 1000;
+      // Calibrate only once actual mic samples arrive. AudioContext startup
+      // can advance/suspend its clock before a microphone supplies samples.
+      let audioClockOrigin: number | null = null;
       capture.port.onmessage = ({ data }: MessageEvent<{ samples?: Float32Array; startFrame?: number; stopped?: boolean }>) => {
         if (this.state !== "recording" && this.state !== "draining") return;
-        if (data.samples) {
-          if (this.audioStartedAt === null && data.startFrame !== undefined) {
-            this.audioStartedAt = audioClockOrigin + data.startFrame / context.sampleRate * 1000;
+        if (data.samples && data.startFrame !== undefined) {
+          if (audioClockOrigin === null) {
+            audioClockOrigin = performance.now() - (data.startFrame + data.samples.length) / context.sampleRate * 1000;
+            this.onaudiostart?.();
           }
-          if (!this.sound && this.state === "recording") {
-            const rms = Math.sqrt(data.samples.reduce((sum, value) => sum + value * value, 0) / data.samples.length);
-            if (rms > 0.008) { this.sound = true; this.onsoundstart?.(); }
+          if (this.answerWindowStart !== null) {
+            const capturedAt = audioClockOrigin + data.startFrame / context.sampleRate * 1000;
+            const trim = Math.max(0, Math.ceil((this.answerWindowStart - capturedAt) * context.sampleRate / 1000));
+            const samples = trim ? data.samples.slice(trim) : data.samples;
+            if (samples.length) {
+              if (this.audioStartedAt === null) this.audioStartedAt = capturedAt + trim / context.sampleRate * 1000;
+              if (!this.sound && this.state === "recording") {
+                const rms = Math.sqrt(samples.reduce((sum, value) => sum + value * value, 0) / samples.length);
+                if (rms > 0.008) { this.sound = true; this.onsoundstart?.(); }
+              }
+              decoder.acceptWaveformFloat(samples, context.sampleRate);
+            }
           }
-          decoder.acceptWaveformFloat(data.samples, context.sampleRate);
         }
         if (data.stopped) this.requestFinal();
       };
@@ -133,11 +144,14 @@ export class NumberSpeechRecognition implements BrowserSpeechRecognition {
       // Worklet outputs silence, so keeping it scheduled cannot echo the mic.
       capture.connect(context.destination);
       this.state = "recording";
-      this.onaudiostart?.();
     } catch (error) {
       if (this.state === "ended") return;
       this.fail(error instanceof DOMException && error.name === "NotAllowedError" ? "not-allowed" : "audio-capture");
     }
+  }
+
+  beginAnswerWindow(shownAt: number) {
+    if (this.answerWindowStart === null) this.answerWindowStart = shownAt;
   }
 
   private deliver(transcript: string, isFinal: boolean) {

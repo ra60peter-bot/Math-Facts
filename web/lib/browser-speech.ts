@@ -10,6 +10,7 @@ export type BrowserSpeechRecognitionErrorEvent = { error: string };
 export type BrowserSpeechRecognition = {
   processLocally?: boolean;
   usesWordTiming?: boolean;
+  beginAnswerWindow?: (shownAt: number) => void;
   phrases?: SpeechPhrase[];
   lang: string;
   continuous: boolean;

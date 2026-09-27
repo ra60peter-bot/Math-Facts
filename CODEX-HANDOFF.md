@@ -2,6 +2,16 @@
 
 Updated September 27, 2026. Read this before continuing work.
 
+### False early-speech rejection and hundred-number variants (latest)
+
+User's screenshot heard "one thirty two" for 12×11 but rejected it as speech before question reveal. That phrase already parsed as132; the timing guard introduced in the preceding change blocked it. The guard is removed. An invalid early estimated timestamp now falls back to recognition-arrival duration (logged in diagnostics), never a zero/negative time or an accusation that the student spoke early.
+
+Local capture readiness now waits for actual PCM samples rather than connecting an audio node. Calibrate the capture frame clock from the first received microphone buffer; do not extrapolate from AudioContext.currentTime before mic startup. `beginAnswerWindow(shownAt)` is called when practice reveals the question (and by SpeechTest); pre-reveal samples are trimmed before feeding Vosk. The worklet inserts silence for input gaps after capture has begun so elapsed time is not compressed. Acoustic onset remains estimated; no timing claim of physical millisecond precision.
+
+Shared grammar/parser now include full hundreds with/without "and", shorthand (one thirty two/one twelve/one twenty one), a hundred, and three-digit readings (one three two/one one two/one two one). Mixed digit/word transcripts such as one32, 1 thirty two, one hundred and32 are normalized through the same strict phrase lookup. All supported numbers0–225 have nonempty round-tripping forms. Different numeric answers remain different; never guess the expected answer from the question. Three-digit sequences are interpreted as hundreds; conflicting longer lists and spoken equations remain rejected.
+
+64 automated tests pass. End-to-end audio verification replayed generated WAVs through a virtual MediaStream, the real AudioWorklet, the NumberSpeechRecognition adapter, and actual Vosk WASM. All six decoded correctly:132 shorthand/full/individual digits,112 shorthand,121 shorthand, and ten. Playback began1.2s after reveal; measured onsets were1.32–1.35s including leading fixture silence/audio-path latency, while final results arrived2.62–3.83s. No real microphone was accessed. The temporary QA route was removed before deployment. Preserve this pipeline test distinction from earlier decoder-only file tests.
+
 ### Number-engine response timing correction (latest)
 
 User confirms local number recognition works quickly, but every response was being scored around 0.1–0.2s. Cause: the adapter emitted `onspeechstart` on the first RMS > 0.008 audio chunk, so startup/room noise was accepted as speech. That amplitude test now indicates sound only; it cannot stop the response timer.

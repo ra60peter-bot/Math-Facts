@@ -9,9 +9,9 @@ const compile = file => ts.transpileModule(fs.readFileSync(path.join(root, file)
 const parser = { exports: {} };
 vm.runInNewContext(compile("lib/number-parser.ts"), {exports: parser.exports});
 
-async function harness({ pendingPermission = false } = {}) {
+async function harness({ pendingPermission = false, autoReveal = true } = {}) {
   const events = [], buffers = [], outputs = [], timers = new Map();
-  let decoder, capture, resolveStream, stops = 0, removals = 0, closed = 0;
+  let decoder, capture, resolveStream, stops = 0, removals = 0, closed = 0, now = 1000;
   const stream = {getTracks: () => [{stop: () => {stops++;}}]};
   class Model {
     ready = true;
@@ -30,7 +30,7 @@ async function harness({ pendingPermission = false } = {}) {
   const exports = {};
   const context = {
     exports, require: name => name === "vosk-browser" ? {Model} : parser.exports,
-    performance: {now: () => 1000},
+    performance: {now: () => now},
     window: {setTimeout: fn => {const id=timers.size+1;timers.set(id,fn);return id;},clearTimeout:id=>timers.delete(id)},
     navigator: {mediaDevices:{getUserMedia: () => pendingPermission ? new Promise(resolve=>{resolveStream=resolve;}) : Promise.resolve(stream)}},
     AudioContext: class {
@@ -52,7 +52,12 @@ async function harness({ pendingPermission = false } = {}) {
   recognition.onresult = event => outputs.push(event.results[0]);
   recognition.start();
   await new Promise(resolve => setImmediate(resolve));
+  if (autoReveal && capture) {
+    recognition.onaudiostart=()=>recognition.beginAnswerWindow(now);
+    capture.port.onmessage({data:{samples:new Float32Array(1024),startFrame:8000}});
+  }
   return {recognition,events,buffers,outputs,exports,
+    clock(value) {now=value;},
     get decoder() {return decoder;}, get capture() {return capture;},
     get stops() {return stops;}, get removals() {return removals;}, get closed() {return closed;},
     async allowPermission() {resolveStream(stream);await new Promise(resolve=>setImmediate(resolve));},
@@ -61,7 +66,7 @@ async function harness({ pendingPermission = false } = {}) {
 
 test("number decoder receives quiet audio without a volume gate and includes wrong numbers", async () => {
   const h=await harness();
-  h.capture.port.onmessage({data:{samples:new Float32Array([0.0001,0.0002])}});
+  h.capture.port.onmessage({data:{samples:new Float32Array([0.0001,0.0002]),startFrame:9024}});
   assert.equal(h.buffers.length,1);
   const grammar=JSON.parse(h.decoder.grammar);
   for(const number of ["two","six","eight","ten","forty","fifty one","two hundred twenty five","[unk]"]) assert.ok(grammar.includes(number),number);
@@ -72,7 +77,7 @@ test("stopping capture flushes the last audio chunk before requesting a final re
   const h=await harness();h.recognition.stop();
   assert.equal(h.stops,1);assert.equal(h.events.at(-1),"stop");
   assert.ok(!h.events.includes("final-request"));
-  h.capture.port.onmessage({data:{samples:new Float32Array([0.1])}});
+  h.capture.port.onmessage({data:{samples:new Float32Array([0.1]),startFrame:9024}});
   h.capture.port.onmessage({data:{stopped:true}});
   assert.deepEqual(h.events.slice(-2),["buffer","final-request"]);
   h.decoder.handlers.result({event:"result",result:{text:"two"}});
@@ -100,16 +105,50 @@ test("startup noise never fires speech onset; word times use captured frames rat
   h.recognition.onspeechstart=()=>speechEvents++;
   h.recognition.onresult=event=>resultEvents.push(event);
   assert.equal(h.decoder.words,true);
-  // First captured sample is at context 0.6s => performance 1100ms.
-  h.capture.port.onmessage({data:{samples:new Float32Array([0.1,0.2]),startFrame:9600}});
+  // Decoder sample zero is the first sample after question reveal (1000ms).
+  h.capture.port.onmessage({data:{samples:new Float32Array([0.1,0.2]),startFrame:9024}});
   assert.equal(speechEvents,0);
   h.decoder.handlers.partialresult({event:"partialresult",result:{partial:"twenty"}});
   assert.equal(resultEvents[0].speechStartedAt,undefined);
   h.decoder.handlers.result({event:"result",result:{text:"twenty seven",result:[
     {word:"[unk]",start:0.1,end:0.2}, {word:"twenty",start:1.7,end:2}, {word:"seven",start:2,end:2.4}
   ]}});
-  assert.equal(resultEvents[1].speechStartedAt,2800);
+  assert.equal(resultEvents[1].speechStartedAt,2700);
   h.recognition.abort();
+});
+
+test("actual capture starts readiness and pre-reveal samples never enter the decoder", async () => {
+  const h=await harness({autoReveal:false}); let ready=0; const resultEvents=[];
+  h.recognition.onaudiostart=()=>ready++;
+  h.recognition.onresult=event=>resultEvents.push(event);
+  assert.equal(ready,0);
+  // Audio clock has advanced several seconds before the first mic buffer.
+  h.clock(3000);
+  h.capture.port.onmessage({data:{samples:new Float32Array(1024).fill(0.1),startFrame:160000}});
+  assert.equal(ready,1);assert.equal(h.buffers.length,0);
+  h.recognition.beginAnswerWindow(3020);
+  h.clock(3064);
+  h.capture.port.onmessage({data:{samples:new Float32Array(1024).fill(0.1),startFrame:161024}});
+  assert.equal(h.buffers[0].length,704); // first 20ms precede reveal
+  h.decoder.handlers.result({event:"result",result:{text:"one thirty two",result:[{word:"one",start:1.3,end:1.5}]}});
+  assert.equal(resultEvents[0].speechStartedAt,4320);
+  h.recognition.abort();
+});
+
+test("input gaps preserve silence and word timing rather than shortening the audio timeline", () => {
+  let Processor; const messages=[];
+  const scope={Float32Array,currentFrame:0,AudioWorkletProcessor:class {
+    port={postMessage:message=>messages.push(message)};
+  },registerProcessor:(_,ctor)=>{Processor=ctor;}};
+  vm.runInNewContext(fs.readFileSync(path.join(root,"public/number-capture.worklet.js"),"utf8"),scope);
+  const capture=new Processor();
+  capture.process([[]]);assert.equal(capture.offset,0);
+  capture.process([[new Float32Array(128).fill(0.01)]]);
+  scope.currentFrame=128;capture.process([[]]);
+  scope.currentFrame=256;capture.process([[new Float32Array(128).fill(0.02)]]);
+  capture.port.onmessage({data:"stop"});
+  assert.equal(messages[0].samples.length,384);
+  assert.ok(messages[0].samples.slice(128,256).every(value=>value===0));
 });
 
 test("worklet retains sample positions when flushing a partial final buffer", () => {

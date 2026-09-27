@@ -592,6 +592,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
         // timing from a queued React state update or microphone startup.
         flushSync(() => setQuestionReady(true));
         questionStartRef.current = performance.now();
+        recognition.beginAnswerWindow?.(questionStartRef.current);
         ready = true;
         log("Question revealed; four-second timer started");
         if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
@@ -626,11 +627,13 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
       if (!transcript) return;
       if (recognition.usesWordTiming && Number.isFinite(event.speechStartedAt)) {
         const onset = event.speechStartedAt!;
-        if (onset < questionStartRef.current) {
-          fail("Speech began before the question appeared. Tap Mic and wait for the question. No answer was scored.");
-          return;
-        }
-        soundResponseMsRef.current = Math.min(Math.round(onset - questionStartRef.current), TIMEOUT_MS);
+        // Word boundaries are estimates. Do not reject an understood answer
+        // because of a clock/boundary mismatch, or turn it into a zero score.
+        const measured = onset - questionStartRef.current;
+        soundResponseMsRef.current = measured >= 0
+          ? Math.min(Math.round(measured), TIMEOUT_MS)
+          : Math.min(Math.round(performance.now() - questionStartRef.current), TIMEOUT_MS);
+        if (measured < 0) log("Word timing unavailable: using recognition arrival time for this answer");
         latestResponseMs = soundResponseMsRef.current;
       }
       const sameNumber = parsedNumber !== null && parsedNumber === parseSpokenNumber(latestTranscript, voiceMappingsRef.current);
