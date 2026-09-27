@@ -2,6 +2,10 @@
 
 Updated September 26, 2026. Read this before continuing work.
 
+### Latest screenshot diagnosis: final segments without a number
+
+User supplied 3+1 marked Wrong at0.8s with Heard: The answer is. Reproduced bug: `onresult` committed any final transcript, even a final nonnumeric prefix. Recognition now waits for a numeric result across segments and empty-session restarts; deadline finalization offers an unscored retry for nonnumeric transcripts. Parser strips answer introductions before parsing digits, words, or existing aliases (for=4, ate=8). 40 tests and build passed, including prefix-final then separate four/six/eight/ten segments in both modes. This is a concrete app bug fix, not proof that all acoustic recognition failures are resolved. The paired screenshot heard28 for7+1 and correctly marked it wrong. The rollback request was canceled; current work builds on the latest version restored by6a5d754.
+
 ### Most recent follow-up: single syllables in both modes
 
 User reports six/eight/ten frequently return no transcript in BOTH browser and native on-device modes. The shared recognition lifecycle now uses continuous=true and does not call stop() at speechend. Question reveal and the four-second timer wait for `audiostart` (actual capture), not `start` (service start). Both modes allow up to800ms for a buffered result after stopping capture at the empty-transcript deadline. Empty results in either mode do not score an attempt and report whether the browser emitted sound/speech events or neither. No engine-specific acoustic root cause is proven; do not claim actual microphone accuracy is fixed. 37 mocked lifecycle/parser/persistence tests pass. Older descriptions of continuous=false, start-based timing, speechend stopping, or local-only draining below are superseded by this section.

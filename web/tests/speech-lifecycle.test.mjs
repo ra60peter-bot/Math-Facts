@@ -252,10 +252,42 @@ test("digit answers inside answer phrases are recognized without guessing from e
   assert.equal(parser.exports.parseSpokenNumber("the answer is 10 or 40"), null);
   assert.equal(parser.exports.parseSpokenNumber("2 + 8 = 10"), null);
 });
-test("unrecognized speech reaches wrong-answer review instead of getting stuck", () => {
+test("finalized nonnumeric speech keeps listening and eventually offers an unscored retry", () => {
   const h = harness(); h.startAudio(); h.result("unrecognized", true);
-  assert.equal(h.answers.length, 1); assert.equal(h.answers[0][2], null);
-  assert.equal(h.answers[0][1], "unrecognized");
+  assert.equal(h.answers.length, 0); h.expire(); h.expire();
+  assert.equal(h.answers.length, 0); assert.match(h.statuses.at(-1), /no number was recognized/);
+  assert.equal(h.context.recognitionRef.current, null);
+});
+
+test("a final answer introduction does not commit before a single-syllable number arrives", () => {
+  for (const local of [false, true]) {
+    for (const [ending, expected] of [["4", 4], ["four", 4], ["for", 4], ["six", 6], ["ate", 8], ["ten", 10]]) {
+      const h = harness(); h.context.localSpeechReadyRef.current = local; h.context.listen({ id: "phrase" });
+      h.startAudio(); h.clock(800); h.result("The answer is", true);
+      assert.equal(h.answers.length, 0); assert.equal(h.feedback.at(-1), null);
+      h.clock(1200);
+      h.recognition.onresult({ results: [
+        {0: {transcript: "The answer is"}, length: 1, isFinal: true},
+        {0: {transcript: ending}, length: 1, isFinal: true},
+      ] });
+      assert.equal(h.answers.length, 1); assert.equal(h.answers[0][2], expected, ending);
+    }
+  }
+});
+
+test("recognizer ending after an introduction restarts and accepts the following number", () => {
+  const h = harness(); let restarts = 0; h.recognition.start = () => { restarts++; };
+  h.startAudio(); h.clock(800); h.result("The answer is", true); h.recognition.onend();
+  assert.equal(restarts, 1); assert.equal(h.answers.length, 0);
+  h.clock(1200); h.startAudio(); h.result("four", true);
+  assert.equal(h.answers[0][2], 4); assert.equal(h.context.questionStartRef.current, 0);
+});
+
+test("unfinished introduction at deadline waits for a buffered final number", () => {
+  const h = harness(); h.startAudio(); h.clock(800); h.result("The answer is", true);
+  h.expire(); assert.equal(h.answers.length, 0);
+  h.clock(4200); h.result("The answer is 4", true);
+  assert.equal(h.answers[0][2], 4);
 });
 test("51 and fifty-one are recognized even though they are not multiplication products", () => {
   for (const transcript of ["51", "fifty-one"]) {

@@ -546,11 +546,15 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
         return;
       }
       const parsed = parseSpokenNumber(latestTranscript, voiceMappingsRef.current);
+      if (parsed === null) {
+        fail("Words were heard, but no number was recognized. Tap Mic to retry. No answer was scored.");
+        return;
+      }
       handleResponse(card, latestTranscript, parsed, latestTranscript ? latestResponseMs : TIMEOUT_MS);
     };
     const answerDeadline = () => {
       if (!isActive()) return;
-      if (latestTranscript) { finish(); return; }
+      if (parseSpokenNumber(latestTranscript, voiceMappingsRef.current) !== null) { finish(); return; }
       // Stop capturing at four seconds, but let either engine return its
       // buffered result. abort() would discard that result entirely.
       drainingResult = true;
@@ -610,7 +614,9 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
       if (!sameNumber) latestResponseMs = soundResponseMsRef.current ?? Math.min(Math.round(performance.now() - questionStartRef.current), TIMEOUT_MS);
       latestTranscript = transcript;
       setHeard(transcript);
-      if (event.results[event.results.length - 1]?.isFinal) {
+      // "Final" can mark only a segment such as "the answer is". Keep
+      // listening until a number arrives; a finalized prefix is not wrong.
+      if (event.results[event.results.length - 1]?.isFinal && parsedNumber !== null) {
         finish();
       } else {
         // Show feedback alongside the live transcript. Do not stop recognition or
@@ -621,6 +627,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
         setResult(parsed === null ? null : correct
           ? { text: `${latestResponseMs <= 1500 ? "Correct!" : "Slow!"} ${elapsed}`, tone: latestResponseMs <= 1500 ? "good" : "slow" }
           : { text: `Wrong! ${elapsed}`, tone: "wrong" });
+        if (parsed === null) setListenState("Listening — waiting for the number…");
       }
     };
     recognition.onerror = (event: BrowserSpeechRecognitionErrorEvent) => {
@@ -643,7 +650,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
       if (!isActive()) return;
       if (!ready) fail("Microphone did not start. Tap Mic to retry.");
       else if (drainingResult) finish();
-      else if (latestTranscript) finish();
+      else if (parseSpokenNumber(latestTranscript, voiceMappingsRef.current) !== null) finish();
       else if (emptyRestarts < 2 && performance.now() - questionStartRef.current < TIMEOUT_MS) {
         emptyRestarts += 1;
         setListenState("Listening — please repeat your answer");

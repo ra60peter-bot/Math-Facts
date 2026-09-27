@@ -54,7 +54,7 @@ export function normalizeSpokenPhrase(transcript: string) {
   return transcript.toLowerCase().replace(/[^a-z0-9\s-]/g, " ").replace(/-/g, " ").replace(/\s+/g, " ").trim();
 }
 
-export function parseSpokenNumber(transcript: string, mappings: Record<string, number> = {}) {
+export function parseSpokenNumber(transcript: string, mappings: Record<string, number> = {}): number | null {
   const spoken = normalizeSpokenPhrase(transcript);
   if (!spoken) return null;
 
@@ -74,13 +74,11 @@ export function parseSpokenNumber(transcript: string, mappings: Record<string, n
   if (cleaned in mappings) return mappings[cleaned];
   if (cleaned in phraseToNumber) return phraseToNumber[cleaned];
 
-  // Recognition often formats spoken numbers as digits inside an answer
-  // phrase. Accept a single explicit answer, without extracting a number
-  // from an equation or from several competing answers.
-  const answerPhrase = cleaned.match(/^(?:(?:my |your |the )?answer(?: is)?|it is|it s|that is|that s)\s+(\d+)$/);
+  // Strip a complete answer introduction before parsing its number. This
+  // also applies existing aliases ("for", "ate") to phrase endings.
+  const answerPhrase = cleaned.match(/^(?:(?:my |your |the )?answer(?: is)?|it is|it s|that is|that s)\s+(.+)$/);
   if (answerPhrase) {
-    const value = Number(answerPhrase[1]);
-    return Number.isSafeInteger(value) ? value : null;
+    return parseSpokenNumber(answerPhrase[1], mappings);
   }
 
   const tokens = cleaned.split(/\s+/).filter((word) => word in wordToNumber);
