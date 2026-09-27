@@ -11,6 +11,7 @@ import type { BrowserSpeechRecognition, BrowserSpeechRecognitionEvent, BrowserSp
 import { SPEECH_RESULT_GRACE_MS } from "../lib/browser-speech";
 import { addNumberHints, readNumberResult } from "../lib/speech-results";
 import { SpeechTest } from "./speech-test";
+import { MasteryProgress } from "./mastery-progress";
 import { NumberSpeechRecognition, prepareNumberSpeech } from "../lib/number-speech";
 import { HistorySort, historyResult, sortHistoryAttempts } from "../lib/history-sort";
 import { CardState, Grade, Operation, TIMEOUT_MS, defaultState, gradeResponse, masteryScore } from "../lib/learning";
@@ -965,6 +966,7 @@ function PracticeApp({ cloudUser, account = null, isAdmin: localAdmin = false, l
           <label>Questions<select value={questionCount} onChange={(event) => setQuestionCount(Number(event.target.value))}>{QUESTION_COUNT_OPTIONS.map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
           <button className="button primary" onClick={startPractice} disabled={!speechSupported || selectedCount === 0}>Start practice</button>
         </div>
+        <MasteryProgress score={summary.score} subject={operationLabel(operation)} studentName={activeStudent?.name ?? localUserName ?? "Local learner"} factCount={allCards.length} />
         </section>
         <FactGrid operation={operation} selected={selectedFacts[operation]} onChange={(next) => setSelectedFacts((current) => ({ ...current, [operation]: next }))} />
         <div className="stats">

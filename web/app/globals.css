@@ -99,6 +99,30 @@ h2 { font-size: 20px; letter-spacing: -.02em; }
 .session-settings .form-row { margin: 0; gap: 20px; }
 .session-settings .button.primary { margin-left: auto; }
 .session-settings select { min-width: 100px; }
+.mastery-progress { margin-top: 24px; padding: 20px 22px; border: 1px solid #c4b5fd; border-left: 5px solid #7c3aed; border-radius: 12px; background: #f3efff; color: #35205d; }
+.mastery-progress-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px 24px; flex-wrap: wrap; margin-bottom: 18px; }
+.mastery-progress h3 { font-size: 20px; line-height: 1.25; margin: 0 0 5px; }
+.mastery-progress-heading p { margin: 0; font-size: 14px; color: #64517e; overflow-wrap: anywhere; }
+.mastery-progress-score { display: flex; align-items: baseline; gap: 7px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mastery-progress-score strong { font-size: clamp(30px, 4vw, 40px); line-height: 1; letter-spacing: -1px; color: #6d28d9; }
+.mastery-progress-score span { font-size: 16px; color: #64517e; }
+.mastery-progress-track { position: relative; height: 20px; border-radius: 20px; background: #ded3f5; border: 1px solid #c2b0e1; }
+.mastery-progress-fill { height: 100%; border-radius: inherit; background: linear-gradient(90deg, #6d28d9, #a855f7); }
+.mastery-progress-marker { position: absolute; top: 50%; transform: translate(-50%, -50%); width: 10px; height: 28px; background: #ffca55; border: 2px solid #6b4300; border-radius: 6px; }
+.mastery-progress-scale { position: relative; height: 18px; margin-top: 8px; font-size: 12px; font-weight: 700; color: #64517e; font-variant-numeric: tabular-nums; }
+.mastery-progress-scale span { position: absolute; transform: translateX(-50%); }
+.mastery-progress-scale span:first-child { left: 0; transform: none; }
+.mastery-progress-scale span:nth-child(2) { left: 25%; }
+.mastery-progress-scale span:nth-child(3) { left: 50%; }
+.mastery-progress-scale span:nth-child(4) { left: 75%; }
+.mastery-progress-scale span:last-child { right: 0; transform: none; }
+.mastery-progress .mastery-progress-caption { margin: 12px 0 0; font-size: 13px; color: #64517e; }
+:root[data-theme="dark"] .mastery-progress { background: #292039; border-color: #675082; border-left-color: #c49aff; color: #f4edff; }
+:root[data-theme="dark"] .mastery-progress-score strong { color: #ffda7b; }
+:root[data-theme="dark"] .mastery-progress-heading p, :root[data-theme="dark"] .mastery-progress-score span, :root[data-theme="dark"] .mastery-progress-scale, :root[data-theme="dark"] .mastery-progress .mastery-progress-caption { color: #ccbbdf; }
+:root[data-theme="dark"] .mastery-progress-track { background: #443256; border-color: #79608f; }
+:root[data-theme="dark"] .mastery-progress-fill { background: linear-gradient(90deg, #9867ef, #d4adff); }
+:root[data-theme="dark"] .mastery-progress-marker { border-color: #292039; }
 .grid-help { margin: 16px 0 0; color: var(--muted); font-size: 13px; }
 .auth-divider { display: flex; align-items: center; gap: 12px; max-width: 420px; color: var(--muted); margin: 18px 0; }
 .auth-divider::before, .auth-divider::after { content: ""; flex: 1; border-top: 1px solid var(--line); }

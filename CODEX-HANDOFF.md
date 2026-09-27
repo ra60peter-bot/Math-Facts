@@ -2,6 +2,10 @@
 
 Updated September 27, 2026. Read this before continuing work.
 
+### Subject mastery bar in practice setup
+
+Added a prominent purple mastery panel with a gold position marker inside Your practice session. Shows selected student, selected operation, score out of 1,000, and a 0/250/500/750/1,000 scale. Uses existing masteryScore over ALL cards for the operation (81 addition, 45 subtraction, 121 multiplication), not only selected practice facts. No scoring, speech, database, or scheduling changes. Component is web/components/mastery-progress.tsx; includes labeled accessible progressbar and light/dark colors. Temporary browser fixture checked scores 0/224/500/1000, operation/student label changes, and both themes; removed before release.
+
 ### Student deletion password requirement canceled
 
 User explicitly requested undo of b36bfcb. Its code, password setup/reset UI, migration file, and tests were reverted, restoring the previous student-delete confirmation flow. Production SQL restored the migration 007 owner/admin DELETE policy and authenticated DELETE privilege on students; verified authenticated DELETE=true and the exact owner/admin policy expression. No student records were deleted. The temporary password requirement is no longer wanted; do not reintroduce it based on older messages. 67 tests and production build pass.
