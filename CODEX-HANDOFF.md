@@ -2,6 +2,10 @@
 
 Updated September 27, 2026. Read this before continuing work.
 
+### Active identity at the top of the sidebar
+
+CurrentUser shows a highlighted role/name card directly below Math Facts and above navigation. It shows the signed-in student's name or the owner's displayName with email fallback, not whichever student the owner is reviewing. Local mode uses its active learner name. The old duplicate name at the bottom is removed; Switch User remains immediately below navigation. Full-screen practice is unchanged.
+
 ### Progress panel height correction
 
 The user meant to reduce HEIGHT, not width. The progress panel now spans the full available width with a compact horizontal layout: identity, score, and thin meter with scale/caption. Desktop preview at 1100px is about 74px tall; smaller screens wrap for readability. Purple/gold colors and whole-operation scoring remain unchanged. This supersedes the earlier 40%-width layout.

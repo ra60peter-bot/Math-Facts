@@ -15,6 +15,7 @@ import { ProfileGate, ProfileContext, type AccessStudent } from "./profile-gate"
 import { accessRequest } from "../lib/access-client";
 import { SpeechTest } from "./speech-test";
 import { MasteryProgress } from "./mastery-progress";
+import { CurrentUser } from "./current-user";
 import { NumberSpeechRecognition, prepareNumberSpeech } from "../lib/number-speech";
 import { HistorySort, historyResult, sortHistoryAttempts } from "../lib/history-sort";
 import { CardState, Operation, TIMEOUT_MS, defaultState, updateCardState } from "../lib/learning";
@@ -777,7 +778,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
   const summary = automaticity ? getProgressSummary(automaticity, selectedCards) : { total: selectedCards.length, assessed: 0, unassessed: selectedCards.length, training: 0, verifying: 0, verified: 0, due: 0, everVerified: 0, coldChecks: 0, coldCorrectPercent: null, coldAutomaticPercent: null, score: 0 };
   const subjectSummary = automaticity ? getProgressSummary(automaticity, allCards) : null;
   const currentSession = phase === "results" ? sessions[0] : null;
-  const accountName = student?.name ?? account?.email ?? localUserName;
+  const accountName = student?.name || account?.displayName || account?.email || localUserName;
 
   if (view === "users" && isAdmin && cloudUser) {
     return <AppFrame view={view} onNavigate={setView} onExit={() => setPhase("setup")} isAdmin accountName={accountName}>
@@ -973,7 +974,25 @@ function AppFrame({ children, view, onNavigate, onExit, isAdmin = false, account
     window.location.reload();
   }
 
-  return <div className="app-shell"><aside className="sidebar"><div className="brand">Math <span>Facts</span></div><div className="sidebar-navigation"><nav className="nav"><button aria-current={view === "practice" ? "page" : undefined} onClick={() => { onExit(); onNavigate("practice"); }}>Practice</button><button aria-current={view === "history" ? "page" : undefined} onClick={() => onNavigate("history")}>History</button>{!profileAccess.student && <button aria-current={view === "students" ? "page" : undefined} onClick={() => onNavigate("students")}>Students</button>}{isAdmin && <button aria-current={view === "users" ? "page" : undefined} onClick={() => onNavigate("users")}>Admin</button>}</nav>{hasSupabaseConfig() && <button className="button secondary switch-user" onClick={() => void signOut()}>{profileAccess.switchPerson ? "Switch User" : "Sign out"}</button>}</div><div className="account">{accountName && <><strong>{accountName}</strong><br /></>}Voice-first practice<br />Addition, subtraction, and multiplication</div></aside><main className="main">{children}</main></div>;
+  return <div className="app-shell">
+    <aside className="sidebar">
+      <div className="sidebar-header">
+        <div className="brand">Math <span>Facts</span></div>
+        {accountName && <CurrentUser name={accountName} role={profileAccess.student ? "Student" : isAdmin ? "Admin" : profileAccess.switchPerson ? "Account owner" : "Current user"} />}
+      </div>
+      <div className="sidebar-navigation">
+        <nav className="nav">
+          <button aria-current={view === "practice" ? "page" : undefined} onClick={() => { onExit(); onNavigate("practice"); }}>Practice</button>
+          <button aria-current={view === "history" ? "page" : undefined} onClick={() => onNavigate("history")}>History</button>
+          {!profileAccess.student && <button aria-current={view === "students" ? "page" : undefined} onClick={() => onNavigate("students")}>Students</button>}
+          {isAdmin && <button aria-current={view === "users" ? "page" : undefined} onClick={() => onNavigate("users")}>Admin</button>}
+        </nav>
+        {hasSupabaseConfig() && <button className="button secondary switch-user" onClick={() => void signOut()}>{profileAccess.switchPerson ? "Switch User" : "Sign out"}</button>}
+      </div>
+      <div className="account">Voice-first practice<br />Addition, subtraction, and multiplication</div>
+    </aside>
+    <main className="main">{children}</main>
+  </div>;
 }
 
 function Stat({ label, value }: { label: string; value: string }) { return <div className="stat"><strong>{value}</strong><span className="muted">{label}</span></div>; }
