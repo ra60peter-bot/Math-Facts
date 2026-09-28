@@ -19,6 +19,7 @@ import { CurrentUser } from "./current-user";
 import { SessionCelebration } from "./session-celebration";
 import { chooseCelebration, prepareCelebrationAudio, shouldCelebrate, type CelebrationChoice } from "../lib/celebration";
 import { NumberSpeechRecognition, prepareNumberSpeech } from "../lib/number-speech";
+import { isSafariBrowser, prepareSafariNumberAudio, releaseSafariNumberAudio } from "../lib/safari-number-audio";
 import { HistorySort, historyResult, sortHistoryAttempts } from "../lib/history-sort";
 import { CardState, Operation, TIMEOUT_MS, defaultState, updateCardState } from "../lib/learning";
 import { parseSpokenNumber } from "../lib/number-parser";
@@ -386,7 +387,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
         }).catch(() => undefined);
       }
     }
-    return () => { cancelled = true; stopListening(); if (nextRef.current !== null) window.clearTimeout(nextRef.current); };
+    return () => { cancelled = true; stopListening(); releaseSafariNumberAudio(); if (nextRef.current !== null) window.clearTimeout(nextRef.current); };
   }, [cloudUser, progressOwnerId, stopListening]);
 
   const saveProgress = useCallback((nextStates: Record<string, CardState>, nextSessions: SavedSession[]) => {
@@ -431,6 +432,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
 
   const finishSession = useCallback((notice = "") => {
     stopListening();
+    releaseSafariNumberAudio();
     const auto = automaticityRef.current;
     if (!auto?.session || auto.session.status === "ended") return;
     const next = endAutomaticSession(auto);
@@ -700,6 +702,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
         "not-allowed": "Allow microphone access, then tap Mic to retry.",
         "service-not-allowed": "Speech recognition is blocked by this browser. Check its permissions.",
         "audio-capture": "No microphone found. Connect one, then tap Mic to retry.",
+        "audio-interrupted": "Safari interrupted the microphone. Tap Mic to reconnect. No answer was scored.",
         "network": "Speech service connection failed. Check your connection, then tap Mic.",
         "number-decoder": "Number recognition stopped. Tap Mic to retry, or switch recognition mode in practice setup.",
       };
@@ -738,6 +741,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
     const cards = makeCards(operation).filter(card => selectedFacts[operation].has(card.id));
     if (!cards.length) return;
     prepareCelebrationAudio();
+    if (numberSpeechActiveRef.current) prepareSafariNumberAudio();
     setCelebrating(null);
     const previous = automaticityRef.current;
     const next = previous.session && previous.session.status !== "ended"
@@ -754,6 +758,10 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
   const restartRecognition = () => {
     if (current && !answerHandledRef.current) {
       recordInvalidRef.current("Manual recognition restart; no answer scored.");
+      if (numberSpeechActiveRef.current && isSafariBrowser()) {
+        stopListening();
+        prepareSafariNumberAudio();
+      }
       startListening(current);
     }
   };

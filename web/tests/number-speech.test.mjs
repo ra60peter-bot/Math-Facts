@@ -11,10 +11,19 @@ vm.runInNewContext(compile("lib/number-parser.ts"), {exports: parser.exports});
 const onset = {exports:{}};
 vm.runInNewContext(compile("lib/speech-onset.ts"), {exports:onset.exports});
 
-async function harness({ pendingPermission = false, autoReveal = true } = {}) {
+async function harness({ pendingPermission = false, autoReveal = true, userAgent = "test browser" } = {}) {
   const events = [], buffers = [], outputs = [], timers = new Map();
   let decoder, capture, resolveStream, stops = 0, removals = 0, closed = 0, now = 1000;
-  const stream = {getTracks: () => [{stop: () => {stops++;}}]};
+  const contexts = [], listeners = new Map(), tracks = [];
+  let requests = 0, modules = 0;
+  const newStream = () => {
+    const handlers = new Map();
+    const track = {readyState:"live",muted:false,stop() {stops++;this.readyState="ended";},
+      addEventListener(name,fn) {handlers.set(name,fn);}, removeEventListener(name) {handlers.delete(name);},
+      emit(name) {handlers.get(name)?.();}};
+    tracks.push(track);
+    return {getTracks:()=>[track]};
+  };
   class Model {
     ready = true;
     on(event, cb) {if(event === "load") queueMicrotask(() => cb({event:"load",result:true}));}
@@ -35,12 +44,16 @@ async function harness({ pendingPermission = false, autoReveal = true } = {}) {
     exports, require: name => name === "vosk-browser" ? {Model} : name === "./speech-onset" ? onset.exports : parser.exports,
     performance: {now: () => now},
     window: {setTimeout: fn => {const id=timers.size+1;timers.set(id,fn);return id;},clearTimeout:id=>timers.delete(id)},
-    navigator: {mediaDevices:{getUserMedia: () => pendingPermission ? new Promise(resolve=>{resolveStream=resolve;}) : Promise.resolve(stream)}},
+    navigator: {userAgent,mediaDevices:{getUserMedia: () => {requests++;return pendingPermission ? new Promise(resolve=>{resolveStream=resolve;}) : Promise.resolve(newStream());}}},
     AudioContext: class {
-      sampleRate = 16000; currentTime = 0.5; destination = {};
-      audioWorklet = {addModule: async () => {}};
-      resume() {return Promise.resolve();}
-      close() {closed++;return Promise.resolve();}
+      constructor(options) {this.sampleRate=options?.sampleRate??48000;contexts.push(this);}
+      currentTime = 0.5; destination = {}; state = "suspended"; handlers = new Map(); resumes = 0;
+      audioWorklet = {addModule: async () => {modules++;}};
+      resume() {this.resumes++;this.state="running";return Promise.resolve();}
+      close() {this.state="closed";closed++;return Promise.resolve();}
+      addEventListener(name,fn) {this.handlers.set(name,fn);}
+      removeEventListener(name) {this.handlers.delete(name);}
+      emit(name) {this.handlers.get(name)?.();}
       createMediaStreamSource() {return {connect() {},disconnect() {}};}
     },
     AudioWorkletNode: class {
@@ -50,6 +63,12 @@ async function harness({ pendingPermission = false, autoReveal = true } = {}) {
       connect() {} disconnect() {}
     }, DOMException,
   };
+  context.window.addEventListener=(name,fn)=>listeners.set(name,fn);
+  context.window.removeEventListener=name=>listeners.delete(name);
+  const safari = {exports:{}};
+  vm.runInNewContext(compile("lib/safari-number-audio.ts"),{...context,exports:safari.exports});
+  const originalRequire=context.require;
+  context.require=name=>name==="./safari-number-audio"?safari.exports:originalRequire(name);
   vm.runInNewContext(compile("lib/number-speech.ts"),context);
   await exports.prepareNumberSpeech();
   const recognition = new exports.NumberSpeechRecognition();
@@ -60,11 +79,14 @@ async function harness({ pendingPermission = false, autoReveal = true } = {}) {
     recognition.onaudiostart=()=>recognition.beginAnswerWindow(now);
     capture.port.onmessage({data:{samples:new Float32Array(1024),startFrame:8000}});
   }
-  return {recognition,events,buffers,outputs,exports,
+  return {recognition,events,buffers,outputs,exports,safari:safari.exports,contexts,tracks,
     clock(value) {now=value;},
     get decoder() {return decoder;}, get capture() {return capture;},
     get stops() {return stops;}, get removals() {return removals;}, get closed() {return closed;},
-    async allowPermission() {resolveStream(stream);await new Promise(resolve=>setImmediate(resolve));},
+    get requests() {return requests;}, get modules() {return modules;},
+    pagehide() {listeners.get("pagehide")?.();},
+    async next() {const next=new exports.NumberSpeechRecognition();next.start();await new Promise(resolve=>setImmediate(resolve));return next;},
+    async allowPermission() {resolveStream(newStream());await new Promise(resolve=>setImmediate(resolve));},
   };
 }
 
@@ -191,4 +213,95 @@ test("worklet retains sample positions when flushing a partial final buffer", ()
   assert.equal(messages[0].startFrame,32000);
   assert.equal(messages[0].samples.length,256);
   assert.equal(messages[1].stopped,true);
+});
+
+const safariUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15";
+
+test("Safari reuses one microphone/context for 50 questions with fresh decoders and capture clocks", async () => {
+  const h=await harness({userAgent:safariUA,autoReveal:false});
+  let recognition=h.recognition;
+  for(let question=0;question<50;question++) {
+    const results=[];recognition.onresult=event=>results.push(event);
+    const shownAt=1000+question*7000;
+    const firstFrame=question*500000;
+    h.clock(shownAt);
+    recognition.onaudiostart=()=>recognition.beginAnswerWindow(shownAt);
+    h.capture.port.onmessage({data:{samples:new Float32Array(1024),startFrame:firstFrame}});
+    h.capture.port.onmessage({data:{samples:new Float32Array(96000).fill(0.001),startFrame:firstFrame+1024}});
+    const oldDecoder=h.decoder;
+    recognition.stop();
+    assert.equal(h.stops,0,"Safari must retain mic between questions");
+    h.capture.port.onmessage({data:{stopped:true}});
+    oldDecoder.handlers.result({event:"result",result:{text:"two",result:[{word:"two",start:1.25,end:1.5}]}});
+    assert.equal(results[0].speechStartedAt,shownAt+1250,"timing restarts at this question's reveal");
+    assert.equal(h.closed,0);
+    recognition.abort();
+    if(question<49) {
+      recognition=await h.next();
+      assert.notEqual(h.decoder,oldDecoder);
+      oldDecoder.handlers.error({event:"error"}); // late worker event cannot close the next mic
+    }
+  }
+  assert.equal(h.requests,1);assert.equal(h.contexts.length,1);assert.equal(h.modules,1);
+  assert.equal(h.contexts[0].sampleRate,48000);
+  assert.equal(h.removals,50);
+  h.safari.releaseSafariNumberAudio();
+  assert.equal(h.stops,1);assert.equal(h.closed,1);
+});
+
+test("Chrome and Edge on Windows/Mac retain separate 16kHz capture for every answer",async()=>{
+  for(const ua of [
+    "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 Chrome/153.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/153.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 Chrome/153.0.0.0 Safari/537.36 Edg/153.0.0.0",
+    "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/153.0.0.0 Safari/537.36 Edg/153.0.0.0",
+    "Mozilla/5.0 (iPhone) AppleWebKit/605.1.15 CriOS/153.0.0.0 Mobile/15E148 Safari/604.1",
+  ]) {
+    const h=await harness({userAgent:ua});assert.equal(h.safari.isSafariBrowser(),false,ua);
+    h.safari.prepareSafariNumberAudio();
+    h.recognition.abort();
+    const next=await h.next();next.abort();h.safari.releaseSafariNumberAudio();
+    assert.equal(h.requests,2);assert.equal(h.closed,2);assert.equal(h.stops,2);
+    assert.ok(h.contexts.every(context=>context.sampleRate===16000));
+  }
+});
+
+test("Safari resumes a suspended session and replaces an ended microphone",async()=>{
+  const h=await harness({userAgent:safariUA});h.recognition.abort();
+  h.contexts[0].state="suspended";
+  const next=await h.next();
+  assert.equal(h.contexts[0].state,"running");assert.equal(h.requests,1);
+  h.capture.port.onmessage({data:{samples:new Float32Array(1024),startFrame:0}});
+  next.abort();h.tracks[0].readyState="ended";
+  const fresh=await h.next();assert.equal(h.requests,2);assert.equal(h.closed,1);
+  fresh.abort();h.safari.releaseSafariNumberAudio();assert.equal(h.closed,2);
+});
+
+test("Safari interruption reports a retry without scoring silence or retaining broken audio",async()=>{
+  for(const interruption of ["statechange","ended","mute"]) {
+    const h=await harness({userAgent:safariUA});const errors=[];
+    h.recognition.onerror=event=>errors.push(event.error);
+    if(interruption==="statechange") {h.contexts[0].state="interrupted";h.contexts[0].emit(interruption);}
+    else {h.tracks[0][interruption==="ended"?"readyState":"muted"]=interruption==="ended"?"ended":true;h.tracks[0].emit(interruption);}
+    assert.deepEqual(errors,["audio-interrupted"]);assert.equal(h.outputs.length,0);
+    assert.equal(h.closed,1);assert.equal(h.stops,1);
+    const next=await h.next();assert.equal(h.requests,2);
+    next.abort();h.safari.releaseSafariNumberAudio();
+  }
+});
+
+test("Safari cancelled permission and stalled startup are released, including late streams",async()=>{
+  const pending=await harness({userAgent:safariUA,pendingPermission:true});
+  pending.recognition.abort();await pending.allowPermission();
+  assert.equal(pending.stops,1);assert.equal(pending.closed,1);assert.equal(pending.decoder,undefined);
+  const stalled=await harness({userAgent:safariUA,autoReveal:false});
+  stalled.recognition.abort();assert.equal(stalled.stops,1);assert.equal(stalled.closed,1);
+  const next=await stalled.next();assert.equal(stalled.requests,2);next.abort();
+});
+
+test("Safari page exit releases capture even between questions and permits a fresh session",async()=>{
+  const h=await harness({userAgent:safariUA});h.recognition.abort();
+  assert.equal(h.stops,0);h.pagehide();assert.equal(h.stops,1);assert.equal(h.closed,1);
+  h.pagehide();assert.equal(h.closed,1);
+  const next=await h.next();assert.equal(h.requests,2);next.abort();h.safari.releaseSafariNumberAudio();
 });

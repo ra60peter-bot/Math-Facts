@@ -508,8 +508,8 @@ test("a correction after feedback preserves the first answer and cannot award au
   assert.equal(retryGrade, undefined); assert.equal(feedback.tone, "slow");
   assert.equal(next, context.advance);
 });
-test("network and permission failures do not record an answer", () => {
-  for (const error of ["network", "not-allowed", "audio-capture"]) {
+test("network, permission and Safari audio interruptions do not record an answer", () => {
+  for (const error of ["network", "not-allowed", "audio-capture", "audio-interrupted"]) {
     const h = harness(); h.startAudio(); h.recognition.onerror({ error });
     assert.equal(h.answers.length, 0); assert.equal(h.context.timeoutRef.current, null);
   }

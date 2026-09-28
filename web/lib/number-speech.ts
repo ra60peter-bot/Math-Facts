@@ -2,6 +2,7 @@ import type { Model, KaldiRecognizer } from "vosk-browser";
 import type { BrowserSpeechRecognition } from "./browser-speech";
 import { numberToPhrases } from "./number-parser";
 import { SpeechOnset } from "./speech-onset";
+import { acquireSafariNumberAudio, isSafariBrowser, releaseSafariNumberAudio } from "./safari-number-audio";
 
 export const NUMBER_MODEL_URL = "/models/english-numbers-0.15.tar.gz";
 // Include every number, including wrong answers, and an unknown-word path.
@@ -69,6 +70,9 @@ export class NumberSpeechRecognition implements BrowserSpeechRecognition {
   private onset = new SpeechOnset();
   private finalRequested = false;
   private flushTimer: number | undefined;
+  private readonly safari = isSafariBrowser();
+  private captureStarted = false;
+  private detachAudioEvents: (() => void) | null = null;
 
   start() {
     if (this.state === "starting" || this.state === "recording" || this.state === "draining") throw new Error("Recognition already started");
@@ -80,22 +84,43 @@ export class NumberSpeechRecognition implements BrowserSpeechRecognition {
     this.speechStartedAt = null;
     this.onset = new SpeechOnset();
     this.finalRequested = false;
+    this.captureStarted = false;
     this.onstart?.();
     void this.openAudio();
   }
 
   private async openAudio() {
     try {
-      const context = new AudioContext({ sampleRate: 16000 });
-      this.context = context;
-      await context.resume();
-      await context.audioWorklet.addModule("/number-capture.worklet.js");
-      if (this.state !== "starting") return;
-      // Avoid aggressive noise suppression clipping brief consonants. Always
-      // send every audio sample to the decoder, regardless of energy level.
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: false, autoGainControl: true } });
-      if (this.state !== "starting") { stream.getTracks().forEach((track) => track.stop()); return; }
+      let context: AudioContext;
+      let stream: MediaStream;
+      if (this.safari) {
+        ({ context, stream } = await acquireSafariNumberAudio());
+        if (this.state !== "starting") return;
+        this.context = context;
+      } else {
+        context = new AudioContext({ sampleRate: 16000 });
+        this.context = context;
+        await context.resume();
+        await context.audioWorklet.addModule("/number-capture.worklet.js");
+        if (this.state !== "starting") return;
+        // Avoid aggressive noise suppression clipping brief consonants. Always
+        // send every audio sample to the decoder, regardless of energy level.
+        stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: false, autoGainControl: true } });
+        if (this.state !== "starting") { stream.getTracks().forEach((track) => track.stop()); return; }
+      }
       this.stream = stream;
+      if (this.safari) {
+        const interrupted = () => {
+          if ((this.state === "recording" || this.state === "starting") &&
+            (context.state !== "running" || stream.getTracks().some(track => track.readyState === "ended" || track.muted))) this.fail("audio-interrupted");
+        };
+        context.addEventListener("statechange", interrupted);
+        stream.getTracks().forEach(track => { track.addEventListener("ended", interrupted); track.addEventListener("mute", interrupted); });
+        this.detachAudioEvents = () => {
+          context.removeEventListener("statechange", interrupted);
+          stream.getTracks().forEach(track => { track.removeEventListener("ended", interrupted); track.removeEventListener("mute", interrupted); });
+        };
+      }
       const decoder = new model!.KaldiRecognizer(context.sampleRate, NUMBER_GRAMMAR);
       this.decoder = decoder;
       decoder.setWords(true);
@@ -114,7 +139,10 @@ export class NumberSpeechRecognition implements BrowserSpeechRecognition {
         if (message.result.text) this.deliver(message.result.text, true);
         if (this.state === "draining") { this.cleanup(); this.onend?.(); }
       });
-      decoder.on("error", () => this.fail("number-decoder"));
+      decoder.on("error", () => {
+        if (this.safari && this.decoder !== decoder) return;
+        this.fail("number-decoder");
+      });
       this.source = context.createMediaStreamSource(stream);
       const capture = new AudioWorkletNode(context, "number-capture");
       this.capture = capture;
@@ -125,6 +153,7 @@ export class NumberSpeechRecognition implements BrowserSpeechRecognition {
         if (this.state !== "recording" && this.state !== "draining") return;
         if (data.samples && data.startFrame !== undefined) {
           if (audioClockOrigin === null) {
+            this.captureStarted = true;
             audioClockOrigin = performance.now() - (data.startFrame + data.samples.length) / context.sampleRate * 1000;
             this.onaudiostart?.();
           }
@@ -166,7 +195,7 @@ export class NumberSpeechRecognition implements BrowserSpeechRecognition {
   stop() {
     if (this.state !== "recording") { if (this.state === "starting") { this.cleanup(); this.onend?.(); } return; }
     this.state = "draining";
-    this.stream?.getTracks().forEach((track) => track.stop());
+    if (!this.safari) this.stream?.getTracks().forEach((track) => track.stop());
     this.capture?.port.postMessage("stop");
     this.flushTimer = window.setTimeout(() => this.requestFinal(), 250);
   }
@@ -176,16 +205,23 @@ export class NumberSpeechRecognition implements BrowserSpeechRecognition {
     window.clearTimeout(this.flushTimer);
     this.decoder?.retrieveFinalResult();
   }
-  abort() { this.cleanup(); }
+  abort() {
+    const stalled = !this.captureStarted && this.state !== "ended";
+    this.cleanup();
+    if (this.safari && stalled) releaseSafariNumberAudio();
+  }
   private fail(error: string) {
     this.cleanup();
+    if (this.safari) releaseSafariNumberAudio();
     this.onerror?.({ error });
     this.onend?.();
   }
   private cleanup() {
     this.state = "ended";
     window.clearTimeout(this.flushTimer);
-    this.stream?.getTracks().forEach((track) => track.stop());
+    this.detachAudioEvents?.();
+    this.detachAudioEvents = null;
+    if (!this.safari) this.stream?.getTracks().forEach((track) => track.stop());
     this.stream = null;
     if (this.capture) { this.capture.port.onmessage = null; this.capture.disconnect(); this.capture.port.close(); }
     this.source?.disconnect();
@@ -193,7 +229,7 @@ export class NumberSpeechRecognition implements BrowserSpeechRecognition {
     this.source = null;
     this.decoder?.remove();
     this.decoder = null;
-    if (this.context) void this.context.close().catch(() => {});
+    if (this.context && !this.safari) void this.context.close().catch(() => {});
     this.context = null;
   }
 }

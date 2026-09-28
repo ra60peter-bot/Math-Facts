@@ -7,6 +7,7 @@ import { TIMEOUT_MS } from "../lib/learning";
 import { addNumberHints, readNumberResult } from "../lib/speech-results";
 import { parseSpokenNumber } from "../lib/number-parser";
 import { NumberSpeechRecognition } from "../lib/number-speech";
+import { releaseSafariNumberAudio } from "../lib/safari-number-audio";
 
 export function SpeechTest({ local, numbers = false }: { local: boolean; numbers?: boolean }) {
   const [running, setRunning] = useState(false);
@@ -40,6 +41,7 @@ export function SpeechTest({ local, numbers = false }: { local: boolean; numbers
       if (active) setReport((lines) => [...lines.slice(-119), `${((performance.now() - began) / 1000).toFixed(3)}s ${message}`]);
     };
     const cleanup = () => {
+      if (!active) return;
       active = false;
       window.clearTimeout(timer);
       window.clearTimeout(drain);
@@ -47,6 +49,7 @@ export function SpeechTest({ local, numbers = false }: { local: boolean; numbers
       recognition.onspeechstart = recognition.onspeechend = null;
       recognition.onresult = recognition.onerror = null;
       recognition.abort();
+      if (numbers) releaseSafariNumberAudio();
     };
     const finish = () => {
       if (!active) return;
