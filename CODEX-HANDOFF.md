@@ -2,6 +2,10 @@
 
 Updated September 27, 2026. Read this before continuing work.
 
+### Whole-subject progress scope (current clarification)
+
+The 0–1,000 progress panel now uses EVERY fact for the current operation, independent of the practice selection: addition 81, subtraction 45, multiplication 121. Its score and assessed count use getProgressSummary over allCards. The practice queue and selected-fact breakdown still use selectedCards. Deselecting difficult facts cannot raise the subject score or produce 1,000; all facts in the operation must earn full credit. Partial-credit formula and recognition/scheduling behavior are unchanged. This supersedes selected-fact scope in the progress-display section below.
+
 ### Compact progress, fact selection and navigation (current)
 
 The progress bar is now a latest-performance score, separate from cold-check verification. For each selected fact: wrong/assisted/corrected-first-answer/unassessed = 0; correct first answer = 500 + 500 * min(1, 1500 / responseMs). Average per-fact credit across all selected facts. Examples: all correct at 3s = 750; at 2s = 875; all at <=1.5s = 1000. Cap at 999 until every fact earns full credit to prevent rounding to false completion. Latest wrong answers lower the score; invalid/abandoned attempts preserve previous evidence. Repeating one easy fact cannot inflate other facts. Existing scheduler queues, verified counts and cold-check requirements are unchanged. This supersedes the older verified-count-only bar description below. No database migration.

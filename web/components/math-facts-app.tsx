@@ -775,6 +775,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
   const selectedCount = allCards.filter((card) => selectedFacts[operation].has(card.id)).length;
   const selectedCards = allCards.filter(card => selectedFacts[operation].has(card.id));
   const summary = automaticity ? getProgressSummary(automaticity, selectedCards) : { total: selectedCards.length, assessed: 0, unassessed: selectedCards.length, training: 0, verifying: 0, verified: 0, due: 0, everVerified: 0, coldChecks: 0, coldCorrectPercent: null, coldAutomaticPercent: null, score: 0 };
+  const subjectSummary = automaticity ? getProgressSummary(automaticity, allCards) : null;
   const currentSession = phase === "results" ? sessions[0] : null;
   const accountName = student?.name ?? account?.email ?? localUserName;
 
@@ -942,7 +943,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
           <label>Questions<select value={questionCount} onChange={(event) => setQuestionCount(Number(event.target.value))}>{QUESTION_COUNT_OPTIONS.map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
           <button className="button primary" onClick={startPractice} disabled={!speechSupported || numberSpeechStatus === "loading" || selectedCount === 0 || !progressReady}>{automaticity?.session && automaticity.session.status !== "ended" ? "Resume session" : "Start practice"}</button>
         </div>
-        <MasteryProgress score={summary.score} subject={operationLabel(operation)} studentName={activeStudent?.name ?? localUserName ?? "Local learner"} factCount={selectedCards.length} assessedCount={summary.assessed} />
+        <MasteryProgress score={subjectSummary?.score ?? 0} subject={operationLabel(operation)} studentName={activeStudent?.name ?? localUserName ?? "Local learner"} factCount={allCards.length} assessedCount={subjectSummary?.assessed ?? 0} />
         </section>
         {!student && <div className="automaticity-summary" aria-label="Automaticity progress">
           <p><strong>{summary.unassessed}</strong> Not assessed · <strong>{summary.training}</strong> Building speed · <strong>{summary.verifying}</strong> Fast in practice; verifying · <strong>{summary.verified}</strong> Verified automatic</p>
