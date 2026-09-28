@@ -14,13 +14,13 @@ export async function GET(request: NextRequest) {
     auth.service.from("profiles").select("id,email,display_name,role,access_status,is_admin,created_at").order("created_at"),
     auth.service.from("students").select("id,owner_id,display_name,created_at").order("display_name"),
     auth.service.from("practice_sessions").select("id,student_id,operation,started_at,ended_at").order("ended_at", { ascending: false }),
-    auth.service.from("attempts").select("session_id,answer_correct,response_ms"),
+    auth.service.from("attempts").select("id,session_id,fact,operation,answer_correct,is_correct,response_ms,heard,created_at").order("created_at"),
   ]);
   if (profileError || studentError || sessionError || attemptError) {
     return NextResponse.json({ error: profileError?.message ?? studentError?.message ?? sessionError?.message ?? attemptError?.message }, { status: 500 });
   }
 
-  const attemptsBySession = new Map<string, Array<{ answer_correct: boolean; response_ms: number }>>();
+  const attemptsBySession = new Map<string, NonNullable<typeof attempts>>();
   for (const attempt of attempts ?? []) {
     const current = attemptsBySession.get(attempt.session_id) ?? [];
     current.push(attempt);
@@ -43,6 +43,12 @@ export async function GET(request: NextRequest) {
       questions: sessionAttempts.length,
       correct,
       averageMs,
+      attempts: sessionAttempts.map(attempt => ({
+        id: attempt.id, fact: attempt.fact, operation: attempt.operation,
+        answerCorrect: attempt.answer_correct ?? attempt.is_correct,
+        correct: attempt.answer_correct ?? attempt.is_correct,
+        responseMs: attempt.response_ms, heard: attempt.heard ?? "", at: attempt.created_at,
+      })),
     });
     sessionsByStudent.set(session.student_id, current);
   }

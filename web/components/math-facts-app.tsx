@@ -30,7 +30,7 @@ type PendingWrong = { card: FactCard; transcript: string; responseMs: number; at
 type AccountRole = "admin" | "user";
 type AccountProfile = { id: string; email: string; displayName: string | null; role: AccountRole; status: "active" | "blocked" };
 type StudentProfile = { id: string; ownerId: string; name: string; createdAt: string; ownerEmail?: string };
-type AdminSessionSummary = { id: string; operation: Operation; startedAt: string; endedAt: string; questions: number; correct: number; averageMs: number };
+type AdminSessionSummary = SavedSession & { questions: number; correct: number; averageMs: number };
 type ManagedStudent = { id: string; name: string; createdAt: string; sessions: AdminSessionSummary[] };
 type ManagedUser = { id: string; email: string; displayName: string | null; role: AccountRole; status: "active" | "blocked"; createdAt: string; students: ManagedStudent[] };
 type LocalUser = { id: string; name: string; createdAt: string };
@@ -220,26 +220,37 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
   const [speechSupported, setSpeechSupported] = useState(true);
   const [localSpeechStatus, setLocalSpeechStatus] = useState<LocalSpeechStatus | "browser">("browser");
   const [localSpeechError, setLocalSpeechError] = useState("");
-  const [numberSpeechStatus, setNumberSpeechStatus] = useState<"idle" | "loading" | "ready" | "failed">("idle");
+  const [numberSpeechStatus, setNumberSpeechStatus] = useState<"idle" | "loading" | "ready" | "failed">("loading");
   const [numberSpeechActive, setNumberSpeechActive] = useState(false);
   const [numberSpeechError, setNumberSpeechError] = useState("");
   const numberSpeechActiveRef = useRef(false);
   const localSpeechReadyRef = useRef(false);
-  const enableNumberSpeech = async () => {
+  const numberPreparationVersion = useRef(0);
+  const enableNumberSpeech = useCallback(async () => {
+    const version = ++numberPreparationVersion.current;
     setNumberSpeechStatus("loading");
     setNumberSpeechError("");
     try {
       await prepareNumberSpeech();
+      if (version !== numberPreparationVersion.current) return;
       numberSpeechActiveRef.current = true;
       localSpeechReadyRef.current = false;
       setNumberSpeechActive(true);
+      setSpeechSupported(true);
       setNumberSpeechStatus("ready");
       setLocalSpeechStatus("browser");
     } catch (error) {
+      if (version !== numberPreparationVersion.current) return;
       setNumberSpeechStatus("failed");
       setNumberSpeechError(error instanceof Error ? error.message : "Could not prepare number recognition.");
+      setSpeechSupported(Boolean(window.SpeechRecognition ?? window.webkitSpeechRecognition));
     }
-  };
+  }, []);
+  useEffect(() => {
+    void enableNumberSpeech();
+    const preparation = numberPreparationVersion;
+    return () => { preparation.current++; };
+  }, [enableNumberSpeech]);
   const localSpeechPreparationRef = useRef<Promise<boolean> | null>(null);
   const prepareSpeech = useCallback(() => {
     if (localSpeechPreparationRef.current) return localSpeechPreparationRef.current;
@@ -352,7 +363,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
     } else if (!cloudUser || saved.automaticity) restore(saved);
     else setSyncMessage("Connect to load this student's progress before practicing.");
     const Recognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
-    setSpeechSupported(Boolean(Recognition));
+    setSpeechSupported(Boolean(Recognition) || Boolean(window.AudioContext && navigator.mediaDevices?.getUserMedia));
     if ("serviceWorker" in navigator) {
       if (process.env.NODE_ENV === "production") {
         navigator.serviceWorker.register("/sw.js").catch(() => undefined);
@@ -717,7 +728,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
   useEffect(() => { startListeningRef.current = startListening; }, [startListening]);
 
   const startPractice = () => {
-    if (!speechSupported || !progressReady || !automaticityRef.current) return;
+    if (!speechSupported || numberSpeechStatus === "loading" || !progressReady || !automaticityRef.current) return;
     const cards = makeCards(operation).filter(card => selectedFacts[operation].has(card.id));
     if (!cards.length) return;
     const previous = automaticityRef.current;
@@ -883,7 +894,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
           <Stat label="Average response time" value={currentSession.attempts.length ? `${(currentSession.attempts.reduce((sum, attempt) => sum + attempt.responseMs, 0) / currentSession.attempts.length / 1000).toFixed(1)}s` : "—"} />
         </div>
         <div className="form-row">
-          <button className="button primary" onClick={startPractice} disabled={!speechSupported || selectedCount === 0 || !progressReady} title="Practice again with the same student, operation, selected facts, and question count">Repeat</button>
+          <button className="button primary" onClick={startPractice} disabled={!speechSupported || numberSpeechStatus === "loading" || selectedCount === 0 || !progressReady} title="Practice again with the same student, operation, selected facts, and question count">Repeat</button>
           <button className="button secondary" onClick={() => setPhase("setup")}>New session</button>
           <button className="button secondary" onClick={() => setView("history")}>View history</button>
         </div>
@@ -896,13 +907,13 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
           <p className="muted">Choose your facts, then speak each answer aloud. Build confidence one question at a time.</p>
         </header>
         {!speechSupported && <p className="notice">This app requires speech recognition. Use the latest Chrome or Edge on a laptop or desktop, then allow microphone access.</p>}
-        {speechSupported && <section className="voice-settings" aria-labelledby="voice-settings-title">
+        <section className="voice-settings" aria-labelledby="voice-settings-title">
           <div className="voice-settings-copy">
-            <div className="voice-settings-heading"><h2 id="voice-settings-title">Voice recognition</h2><span className="voice-mode">{numberSpeechActive ? "Number recognition active" : localSpeechStatus === "ready" ? "On-device active" : "Browser active"}</span></div>
+            <div className="voice-settings-heading"><h2 id="voice-settings-title">Voice recognition</h2><span className="voice-mode">{numberSpeechStatus === "loading" ? "Preparing number recognition…" : numberSpeechActive ? "Number recognition active" : localSpeechStatus === "ready" ? "On-device active" : speechSupported ? "Browser active" : "Recognition unavailable"}</span></div>
             <div role="status">
               <p>{numberSpeechActive ? "Using a local engine with a number-focused vocabulary. Your voice stays on this device." :
                 numberSpeechStatus === "loading" ? "Preparing number recognition (about 40 MB on the first download)…" :
-                localSpeechStatus === "browser" ? "If the browser misses short answers, enable number recognition. It uses a separate local speech engine and a one-time download of about 40 MB." :
+                localSpeechStatus === "browser" ? "Number recognition is the default. It runs on this device after a one-time download of about 40 MB. Browser recognition is available as a fallback." :
                 localSpeechStatus === "ready" ? "The English speech pack is ready. Answers are recognized on this device." :
                 localSpeechStatus === "checking" ? "Checking whether this browser supports on-device recognition…" :
                 localSpeechStatus === "downloading" ? "Downloading the English speech pack. You can practice while it downloads." :
@@ -916,11 +927,11 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
             {!numberSpeechActive && <button className="button primary" disabled={numberSpeechStatus === "loading"} onClick={() => void enableNumberSpeech()}>{numberSpeechStatus === "loading" ? "Preparing number recognition…" : numberSpeechStatus === "ready" ? "Use number recognition" : "Enable number recognition"}</button>}
             {numberSpeechActive && <button className="button secondary" onClick={() => { numberSpeechActiveRef.current = false; setNumberSpeechActive(false); }}>Use browser recognition</button>}
             {localSpeechStatus === "failed" && <button className="button primary" onClick={() => void prepareSpeech()}>Retry speech download</button>}
-            {localSpeechStatus === "browser" && !numberSpeechActive && <button className="button secondary" onClick={() => void prepareSpeech()}>Try browser’s on-device pack</button>}
+            {localSpeechStatus === "browser" && !numberSpeechActive && numberSpeechStatus !== "loading" && <button className="button secondary" onClick={() => void prepareSpeech()}>Try browser’s on-device pack</button>}
             {localSpeechStatus === "ready" && <button className="button secondary" onClick={() => { localSpeechReadyRef.current = false; setLocalSpeechStatus("browser"); }}>Use browser recognition</button>}
           </div>
-          {!student && <SpeechTest key={numberSpeechActive ? "numbers" : localSpeechStatus === "ready" ? "local" : "browser"} local={localSpeechStatus === "ready"} numbers={numberSpeechActive} />}
-        </section>}
+          {!student && numberSpeechStatus !== "loading" && <SpeechTest key={numberSpeechActive ? "numbers" : localSpeechStatus === "ready" ? "local" : "browser"} local={localSpeechStatus === "ready"} numbers={numberSpeechActive} />}
+        </section>
         {syncMessage && <p className="notice" role="status">{syncMessage}{!progressReady && <button className="button secondary" onClick={() => window.location.reload()}>Retry loading progress</button>}</p>}
         <section className="session-settings" aria-labelledby="session-settings-title">
         <h2 id="session-settings-title">Your practice session</h2>
@@ -929,7 +940,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
           {cloudUser && !student && <label>Student<select value={selectedStudentId} onChange={(event) => selectStudent(event.target.value)}>{cloudStudents.map((student) => <option key={student.id} value={student.id}>{student.name}{isAdmin && student.ownerEmail ? ` — ${student.ownerEmail}` : ""}</option>)}</select></label>}
           <div className="operation-field"><span>Operation</span><div className="operation-toggle"><button aria-pressed={operation === "add"} onClick={() => setOperation("add")}>Addition</button><button aria-pressed={operation === "sub"} onClick={() => setOperation("sub")}>Subtraction</button><button aria-pressed={operation === "mul"} onClick={() => setOperation("mul")}>Multiplication</button></div></div>
           <label>Questions<select value={questionCount} onChange={(event) => setQuestionCount(Number(event.target.value))}>{QUESTION_COUNT_OPTIONS.map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
-          <button className="button primary" onClick={startPractice} disabled={!speechSupported || selectedCount === 0 || !progressReady}>{automaticity?.session && automaticity.session.status !== "ended" ? "Resume session" : "Start practice"}</button>
+          <button className="button primary" onClick={startPractice} disabled={!speechSupported || numberSpeechStatus === "loading" || selectedCount === 0 || !progressReady}>{automaticity?.session && automaticity.session.status !== "ended" ? "Resume session" : "Start practice"}</button>
         </div>
         <MasteryProgress score={summary.score} subject={operationLabel(operation)} studentName={activeStudent?.name ?? localUserName ?? "Local learner"} factCount={selectedCards.length} />
         </section>
@@ -1110,9 +1121,9 @@ function SessionHistory({ sessions, detailedDates = false, onDelete }: { session
           <h2>Question results</h2>
           {session.attempts.length > 0 && <p className="muted" aria-live="polite">{sort === "result" ? "Wrong answers first, then slow correct answers, then correct answers at or under 1.5 seconds. Each group is ordered slowest to fastest." : "In question order. Select Result to show wrong answers first, then slow answers, then correct answers."}</p>}
           {session.attempts.length === 0 ? <p className="muted">No question results were recorded.</p> : <table className="history-table attempt-table">
-            <thead><tr><th scope="col" aria-sort={sort === "question" ? "ascending" : "none"}><button className="history-sort" onClick={() => setSort("question")} aria-label="Sort by question order"># {sort === "question" ? "↑" : "↕"}</button></th><th scope="col">Question</th><th scope="col">Response time</th><th scope="col" aria-sort={sort === "result" ? "other" : "none"}><button className="history-sort" onClick={() => setSort("result")}>Result {sort === "result" ? "↓" : "↕"}</button></th></tr></thead>
+            <thead><tr><th scope="col" aria-sort={sort === "question" ? "ascending" : "none"}><button className="history-sort" onClick={() => setSort("question")} aria-label="Sort by question order"># {sort === "question" ? "↑" : "↕"}</button></th><th scope="col">Question</th><th scope="col">Answer heard</th><th scope="col">Response time</th><th scope="col" aria-sort={sort === "result" ? "other" : "none"}><button className="history-sort" onClick={() => setSort("result")}>Result {sort === "result" ? "↓" : "↕"}</button></th></tr></thead>
             <tbody>{sortHistoryAttempts(session.attempts, sort).map(({ attempt, questionNumber }) => <tr key={attempt.id}>
-              <td>{questionNumber}</td><td>{attempt.fact}</td><td>{(attempt.responseMs / 1000).toFixed(2)}s</td>
+              <td>{questionNumber}</td><td>{attempt.fact}</td><td className="answer-heard">{attempt.heard?.trim() || "No answer recorded"}</td><td>{(attempt.responseMs / 1000).toFixed(2)}s</td>
               <td><span className={`attempt-result ${historyResult(attempt)}`}>{historyResult(attempt) === "slow" ? "Slow (correct)" : attempt.answerCorrect ? "Correct" : "Wrong"}</span></td>
             </tr>)}</tbody>
           </table>}
@@ -1210,6 +1221,5 @@ function UserManagement({ currentUserId }: { currentUserId: string }) {
 }
 
 function AdminSessionHistory({ sessions }: { sessions: AdminSessionSummary[] }) {
-  if (sessions.length === 0) return <p className="empty">No completed sessions.</p>;
-  return <div className="table-scroll"><table className="history-table"><thead><tr><th>Date</th><th>Operation</th><th>Questions</th><th>Accuracy</th><th>Average time</th></tr></thead><tbody>{sessions.map((session) => <tr key={session.id}><td>{new Date(session.endedAt).toLocaleString()}</td><td>{operationLabel(session.operation)}</td><td>{session.questions}</td><td>{session.questions ? `${Math.round((session.correct / session.questions) * 100)}%` : "-"}</td><td>{session.averageMs ? `${(session.averageMs / 1000).toFixed(1)}s` : "-"}</td></tr>)}</tbody></table></div>;
+  return <SessionHistory sessions={sessions} detailedDates />;
 }

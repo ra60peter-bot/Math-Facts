@@ -2,6 +2,14 @@
 
 Updated September 27, 2026. Read this before continuing work.
 
+### Default number recognition and recorded answers (current)
+
+Number recognition (the separate local Vosk engine) now prepares automatically when PracticeApp loads, including after choosing a profile. Practice/Repeat wait while it prepares. Preparation uses the existing shared/cache-aware model loader; it does not request microphone access until practice begins. Browser recognition remains an explicit alternative and fallback on preparation failure. Generation guards prevent unmounted/Strict Mode preparations from activating stale UI. This supersedes older instructions saying number recognition is opt-in.
+
+Expanded history now includes Answer heard for every question, showing the original stored transcript including wrong answers. Missing transcripts say No answer recorded; older missing transcripts are not reconstructed. Existing heard fields already persist locally, in scheduler audit/recovery, and in Supabase attempts, so no migration is required. Admin account history now uses the same expandable question-details view and receives stored transcripts via its existing authorized API.
+
+Validation: 122 tests pass, including automatic preparation/success/failure/unmount coverage, rendered wrong/missing-answer history, and wrong-answer transcript cloud round-trip. Browser QA used sample account/history API responses with the REAL local speech model: automatically prepared, then became active without clicking Enable; start was disabled until ready. Wrong-answer/missing-transcript rows visually verified. No live microphone scoring was tested or changed. Temporary fixture removed.
+
 ### Owner password gate and student mode (current)
 
 Implemented the user's clarified account model: owner signs in once before a browser can list family students; every subsequent owner selection requires password; password-free students can practice and view their own history only. Owners manage only their students; admin alone manages adults. Invitations/password-reset callback sets a password, then opens Students. Admin Google sign-in remains available. See `web/PROFILE-ACCESS.md` for enforcement, migration and limits.

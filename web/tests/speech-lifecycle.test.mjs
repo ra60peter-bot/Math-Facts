@@ -280,7 +280,7 @@ test("revised nonnumeric transcript and recognition failures clear live feedback
   assert.equal(h.feedback.at(-1), null); assert.equal(h.answers.length, 0);
 });
 
-test("browser recognition remains the default until local speech is explicitly enabled", () => {
+test("browser fallback uses remote recognition unless its native local pack is explicitly enabled", () => {
   const h = harness();
   assert.equal(h.recognition.processLocally, undefined);
   assert.ok(!source.includes("useEffect(() => { void prepareSpeech(); }"));
