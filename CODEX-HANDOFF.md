@@ -2,6 +2,10 @@
 
 Updated September 27, 2026. Read this before continuing work.
 
+### Dark default and completion celebration
+
+First visits now render dark mode before hydration; an explicitly saved light preference is preserved, and blocked storage still defaults dark. Completed sets with attempts >= the session target and strictly greater than 80% answerCorrect trigger a five-second SessionCelebration on the results screen (not history). Early/incomplete sets and exactly 80% do not qualify. Blobmoji SVGs are bundled locally with Apache license/attribution in public/celebration. Flying/wiggling blobs, confetti, a banner, mute/dismiss controls, and reduced-motion static fallback accompany an original Web Audio tune. Start/Repeat primes the audio context within the user gesture; playback failure never blocks practice. Cleanup stops music and timers on navigation/repeat/dismiss. No speech parsing, timing, scheduling, or scoring changes. Added boundary, audio cleanup, lifecycle, and dark-default tests.
+
 ### Active identity at the top of the sidebar
 
 CurrentUser shows a highlighted role/name card directly below Math Facts and above navigation. It shows the signed-in student's name or the owner's displayName with email fallback, not whichever student the owner is reviewing. Local mode uses its active learner name. The old duplicate name at the bottom is removed; Switch User remains immediately below navigation. Full-screen practice is unchanged.

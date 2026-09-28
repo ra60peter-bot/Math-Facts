@@ -209,6 +209,32 @@ input, select { min-width: 145px; background: var(--surface); border: 1px solid 
 .fact-cell.unavailable { background: transparent; border-color: transparent; cursor: default; }
 .axis-toggle:has(input:checked) { background: var(--surface-2); border-color: var(--selected-line); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.celebration { position: fixed; inset: 0; z-index: 30; pointer-events: none; overflow: hidden; }
+.celebration-particles { position: absolute; inset: 0; }
+.celebration-blob { position: absolute; left: var(--x); bottom: -110px; width: var(--size); height: var(--size); animation: blob-flight 4.3s var(--delay) cubic-bezier(.2,.6,.5,1) both; }
+.celebration-blob > span { display: block; width: 100%; height: 100%; background: center / contain no-repeat; filter: drop-shadow(0 5px 3px #0003); animation: blob-wiggle .45s ease-in-out infinite alternate; }
+.celebration-confetti { position: absolute; left: var(--x); top: -24px; width: 9px; height: 16px; border-radius: 3px; animation: celebration-rain 4.1s var(--delay) linear both; }
+.celebration-banner { position: absolute; top: 24px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 14px; width: max-content; max-width: calc(100% - 32px); padding: 14px 18px; border: 2px solid #f5c952; border-radius: 20px; color: #fff7d6; background: #332246; box-shadow: 0 10px 40px #0004; pointer-events: auto; animation: celebration-appear .25s ease-out; }
+.celebration-mascot { width: 60px; height: 60px; flex-shrink: 0; background: url('/celebration/party-blob.svg') center / contain no-repeat; }
+.celebration-banner strong { display: block; font-size: 26px; line-height: 1.2; color: #ffe17d; }
+.celebration-banner span { font-size: 14px; }
+.celebration-banner .button { color: #fff7d6; background: #4a365e; border-color: #81649b; }
+.celebration-close { align-self: flex-start; border: 0; min-width: 32px; min-height: 32px; border-radius: 8px; background: transparent; color: #fff7d6; font-size: 24px; line-height: 1; }
+@keyframes blob-flight { 0% { transform: translate(-50%, 0) rotate(0); opacity: 0; } 8% { opacity: 1; } 80% { opacity: 1; } 100% { transform: translate(calc(-50% + var(--drift)), calc(-100dvh - 150px)) rotate(var(--spin)); opacity: 0; } }
+@keyframes blob-wiggle { from { transform: rotate(-12deg) scale(1.04,.96); } to { transform: rotate(12deg) scale(.96,1.04); } }
+@keyframes celebration-rain { from { transform: translateY(0) rotate(0); } to { transform: translate(var(--drift), calc(100dvh + 50px)) rotate(500deg); } }
+@keyframes celebration-appear { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .celebration-particles { display: none; }
+  .celebration-banner { animation: none; }
+}
+@media (max-width: 560px) {
+  .celebration-banner { top: 12px; gap: 8px; padding: 10px; }
+  .celebration-mascot { width: 40px; height: 40px; }
+  .celebration-banner strong { font-size: 21px; }
+  .celebration-banner span { font-size: 12px; }
+  .celebration-banner .button { padding: 6px 10px; }
+}
 @media (max-width: 720px) {
   .practice { padding: 10px 16px 16px; gap: 12px; }
   .practice-toolbar { grid-template-columns: 1fr 1fr; gap: 12px; }
