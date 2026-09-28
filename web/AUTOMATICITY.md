@@ -1,3 +1,7 @@
+## Progress display update
+
+The 0–1,000 bar now reflects each selected fact's latest scored first answer, independently of verification: wrong/assisted/unassessed = 0; correct = 500 + 500 × min(1, 1500 / responseMs). The bar averages these credits across selected facts and reaches 1,000 only when every fact is correct within 1.5 seconds. Unassessed facts are explicitly labeled; they are not recorded as wrong. Invalid attempts preserve prior evidence. Verified counts and every scheduling rule below remain unchanged. This supersedes the original verified-count-only display.
+
 # Adaptive automaticity scheduler
 
 One pure scheduler in `lib/automaticity.ts` serves all three operations. It replaces

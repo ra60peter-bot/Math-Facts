@@ -340,13 +340,13 @@ test("duplicate and stale result IDs never grade again or grade the next present
   assert.equal(h.p.session.gradedCount,1);
 });
 
-test("progress counts are consistent and only qualifying cold checks drive primary reporting", () => {
+test("progress credit is separate from qualifying cold-check verification", () => {
   const h=harness(),c=card("mul-7-8");assess(h,c);h.fill(c,3);coldVisit(h,c,2400);
   const summary=A.getProgressSummary(h.p,deck,()=>h.now);
   assert.equal(summary.unassessed+summary.training+summary.verifying+summary.verified,summary.total);
   assert.equal(summary.assessed,summary.total-summary.unassessed);
   assert.equal(summary.coldChecks,1);assert.equal(summary.coldCorrectPercent,100);assert.equal(summary.coldAutomaticPercent,0);
-  assert.equal(summary.verified,0);assert.equal(summary.score,0);
+  assert.equal(summary.verified,0);assert.ok(summary.score>0);
 });
 
 test("persisted reload retains retry counters, allocation, UUID identities and next selection", () => {
@@ -386,4 +386,34 @@ test("assistance and corrected first answers reset verification without creating
     assert.equal(h.p.facts[c.id].stage,"TRAINING");assert.equal(h.p.facts[c.id].coldStreak,0);
     assert.equal(h.p.events.at(-1).result,"WRONG_OR_ASSISTED");
   }
+});
+
+
+test("display progress credits correctness and fluency for every operation without changing verification", () => {
+  for (const id of ["add-3-4","sub-7-3","mul-7-8"]) {
+    const c=card(id),h=harness([c]);
+    assert.equal(A.getProgressSummary(h.p,[c]).score,0);
+    assess(h,c,1000,false);assert.equal(A.getProgressSummary(h.p,[c]).score,0);
+    h.end();h.start();assess(h,c,3000);assert.equal(A.getProgressSummary(h.p,[c]).score,750);
+    h.end();h.start();assess(h,c,2000);assert.equal(A.getProgressSummary(h.p,[c]).score,875);
+    h.end();h.start();assess(h,c,1501);assert.equal(A.getProgressSummary(h.p,[c]).score,999);
+    h.end();h.start();assess(h,c,1500);assert.equal(A.getProgressSummary(h.p,[c]).score,1000);
+    assert.equal(A.getProgressSummary(h.p,[c]).verified,0);
+    h.end();h.start();assess(h,c,800,false);assert.equal(A.getProgressSummary(h.p,[c]).score,0);
+  }
+});
+test("progress averages distinct selected facts, counts unseen as no evidence, and never inflates from repeated easy facts", () => {
+ const a=card("mul-3-2"),b=card("mul-7-8"),h=harness([a,b]);
+ assess(h,a,1000);assert.equal(A.getProgressSummary(h.p,[a,b]).score,500);
+ h.end();h.start();assess(h,a,1000);assert.equal(A.getProgressSummary(h.p,[a,b]).score,500);
+ assess(h,b,3000);assert.equal(A.getProgressSummary(h.p,[a,b]).score,875);
+ assert.equal(A.getProgressSummary(h.p,[b]).score,750);
+ assert.equal(A.getProgressSummary(h.p,[]).score,0);
+});
+test("assisted and corrected first answers do not earn progress; technical failures preserve prior evidence", () => {
+ const c=card("mul-7-8"),h=harness([c]);
+ h.attempt(c,1000,true,"assessment",{assisted:true});assert.equal(A.getProgressSummary(h.p,[c]).score,0);
+ h.end();h.start();h.attempt(c,1000,true,"assessment",{firstAnswerCorrect:false});assert.equal(A.getProgressSummary(h.p,[c]).score,0);
+ h.end();h.start();assess(h,c,3000);assert.equal(A.getProgressSummary(h.p,[c]).score,750);
+ h.end();h.start();h.attempt(c,1000,false,"assessment",{invalid:true});assert.equal(A.getProgressSummary(h.p,[c]).score,750);
 });

@@ -891,7 +891,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
         <div className="stats">
           <Stat label="Accuracy" value={`${Math.round((currentSession.attempts.filter((attempt) => attempt.answerCorrect).length / Math.max(currentSession.attempts.length, 1)) * 100)}%`} />
           <Stat label="Questions" value={String(currentSession.attempts.length)} />
-          <Stat label="Average response time" value={currentSession.attempts.length ? `${(currentSession.attempts.reduce((sum, attempt) => sum + attempt.responseMs, 0) / currentSession.attempts.length / 1000).toFixed(1)}s` : "—"} />
+          <Stat label="Average response time" value={currentSession.attempts.length ? `${(currentSession.attempts.reduce((sum, attempt) => sum + attempt.responseMs, 0) / currentSession.attempts.length / 1000).toFixed(2)}s` : "—"} />
         </div>
         <div className="form-row">
           <button className="button primary" onClick={startPractice} disabled={!speechSupported || numberSpeechStatus === "loading" || selectedCount === 0 || !progressReady} title="Practice again with the same student, operation, selected facts, and question count">Repeat</button>
@@ -942,7 +942,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
           <label>Questions<select value={questionCount} onChange={(event) => setQuestionCount(Number(event.target.value))}>{QUESTION_COUNT_OPTIONS.map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
           <button className="button primary" onClick={startPractice} disabled={!speechSupported || numberSpeechStatus === "loading" || selectedCount === 0 || !progressReady}>{automaticity?.session && automaticity.session.status !== "ended" ? "Resume session" : "Start practice"}</button>
         </div>
-        <MasteryProgress score={summary.score} subject={operationLabel(operation)} studentName={activeStudent?.name ?? localUserName ?? "Local learner"} factCount={selectedCards.length} />
+        <MasteryProgress score={summary.score} subject={operationLabel(operation)} studentName={activeStudent?.name ?? localUserName ?? "Local learner"} factCount={selectedCards.length} assessedCount={summary.assessed} />
         </section>
         {!student && <div className="automaticity-summary" aria-label="Automaticity progress">
           <p><strong>{summary.unassessed}</strong> Not assessed · <strong>{summary.training}</strong> Building speed · <strong>{summary.verifying}</strong> Fast in practice; verifying · <strong>{summary.verified}</strong> Verified automatic</p>
@@ -951,7 +951,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
           {summary.everVerified > summary.verified && <p>Previously verified; needs recheck: {summary.everVerified - summary.verified} facts.</p>}
           <details><summary>Individual fact status</summary><div className="fact-status-list">{selectedCards.map(card => { const fact = automaticity?.facts[card.id]; return <p key={card.id}><strong>{card.a} {operationSymbol(operation)} {card.b}</strong> — {fact?.everVerifiedAutomatic && fact.stage !== "MAINTENANCE" ? "Previously verified; needs recheck" : stageLabels[fact?.stage ?? "UNASSESSED"]}{fact?.dueAt ? ` · Check ${new Date(fact.dueAt).toLocaleString()}` : ""}</p>; })}</div></details>
         </div>}
-        {student ? <details><summary>Choose specific facts (optional)</summary><FactGrid operation={operation} selected={selectedFacts[operation]} onChange={(next) => setSelectedFacts((current) => ({ ...current, [operation]: next }))} /></details> : <FactGrid operation={operation} selected={selectedFacts[operation]} onChange={(next) => setSelectedFacts((current) => ({ ...current, [operation]: next }))} />}
+        <FactGrid operation={operation} selected={selectedFacts[operation]} onChange={(next) => setSelectedFacts((current) => ({ ...current, [operation]: next }))} />
         <div className="stats">
           <Stat label="Facts selected" value={`${selectedCount}/${allCards.length}`} />
           <Stat label="Verified automatic" value={`${summary.verified}/${summary.total}`} />
@@ -972,7 +972,7 @@ function AppFrame({ children, view, onNavigate, onExit, isAdmin = false, account
     window.location.reload();
   }
 
-  return <div className="app-shell"><aside className="sidebar"><div className="brand">Math <span>Facts</span></div><nav className="nav"><button aria-current={view === "practice" ? "page" : undefined} onClick={() => { onExit(); onNavigate("practice"); }}>Practice</button><button aria-current={view === "history" ? "page" : undefined} onClick={() => onNavigate("history")}>History</button>{!profileAccess.student && <button aria-current={view === "students" ? "page" : undefined} onClick={() => onNavigate("students")}>Students</button>}{isAdmin && <button aria-current={view === "users" ? "page" : undefined} onClick={() => onNavigate("users")}>Admin</button>}</nav><div className="account">{accountName && <><strong>{accountName}</strong><br /></>}Voice-first practice<br />Addition, subtraction, and multiplication{hasSupabaseConfig() && <><br /><button className="button secondary" onClick={() => void signOut()}>{profileAccess.switchPerson ? "Switch person" : "Sign out"}</button></>}</div></aside><main className="main">{children}</main></div>;
+  return <div className="app-shell"><aside className="sidebar"><div className="brand">Math <span>Facts</span></div><div className="sidebar-navigation"><nav className="nav"><button aria-current={view === "practice" ? "page" : undefined} onClick={() => { onExit(); onNavigate("practice"); }}>Practice</button><button aria-current={view === "history" ? "page" : undefined} onClick={() => onNavigate("history")}>History</button>{!profileAccess.student && <button aria-current={view === "students" ? "page" : undefined} onClick={() => onNavigate("students")}>Students</button>}{isAdmin && <button aria-current={view === "users" ? "page" : undefined} onClick={() => onNavigate("users")}>Admin</button>}</nav>{hasSupabaseConfig() && <button className="button secondary switch-user" onClick={() => void signOut()}>{profileAccess.switchPerson ? "Switch User" : "Sign out"}</button>}</div><div className="account">{accountName && <><strong>{accountName}</strong><br /></>}Voice-first practice<br />Addition, subtraction, and multiplication</div></aside><main className="main">{children}</main></div>;
 }
 
 function Stat({ label, value }: { label: string; value: string }) { return <div className="stat"><strong>{value}</strong><span className="muted">{label}</span></div>; }
@@ -1094,7 +1094,7 @@ function SessionHistory({ sessions, detailedDates = false, onDelete }: { session
     {deleteError && <p className="notice" role="alert">{deleteError}</p>}
     <div className="table-scroll"><table className="history-table"><thead><tr><th>When</th><th>Operation</th><th>Questions</th><th>Accuracy</th><th>Average time</th><th>Details</th></tr></thead><tbody>{sessions.map((session) => {
       const correct = session.attempts.filter((attempt) => attempt.answerCorrect).length;
-      const averageMs = session.attempts.length ? Math.round(session.attempts.reduce((sum, attempt) => sum + attempt.responseMs, 0) / session.attempts.length) : 0;
+      const averageMs = session.attempts.length ? (session.attempts.reduce((sum, attempt) => sum + attempt.responseMs, 0) / session.attempts.length) : 0;
       const expanded = expandedId === session.id;
       const detailsId = `${historyId}-${session.id}`;
       const sort = sessionSorts[session.id] ?? "question";
@@ -1105,7 +1105,7 @@ function SessionHistory({ sessions, detailedDates = false, onDelete }: { session
         <tr className={`session-row ${expanded ? "expanded" : ""}`} onClick={toggle}>
           <td>{date}</td><td>{operationLabel(session.operation)}</td><td>{session.attempts.length}</td>
           <td>{session.attempts.length ? `${Math.round((correct / session.attempts.length) * 100)}%` : "-"}</td>
-          <td>{session.attempts.length ? `${(averageMs / 1000).toFixed(1)}s` : "-"}</td>
+          <td>{session.attempts.length ? `${(averageMs / 1000).toFixed(2)}s` : "-"}</td>
           <td><div className="table-actions"><button className="button secondary" aria-expanded={expanded} aria-controls={detailsId} aria-label={`${expanded ? "Hide" : "View"} questions for ${operationLabel(session.operation)} on ${date}`} onClick={(event) => { event.stopPropagation(); toggle(); }}>{expanded ? "Hide questions" : "View questions"}</button>
             {onDelete && <button className="button danger" disabled={Boolean(deletingId)} aria-label={`Delete session from ${date}`} onClick={(event) => { event.stopPropagation(); setConfirmId(session.id); setDeleteError(""); }}>Delete</button>}
           </div></td>

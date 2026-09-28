@@ -2,6 +2,14 @@
 
 Updated September 27, 2026. Read this before continuing work.
 
+### Compact progress, fact selection and navigation (current)
+
+The progress bar is now a latest-performance score, separate from cold-check verification. For each selected fact: wrong/assisted/corrected-first-answer/unassessed = 0; correct first answer = 500 + 500 * min(1, 1500 / responseMs). Average per-fact credit across all selected facts. Examples: all correct at 3s = 750; at 2s = 875; all at <=1.5s = 1000. Cap at 999 until every fact earns full credit to prevent rounding to false completion. Latest wrong answers lower the score; invalid/abandoned attempts preserve previous evidence. Repeating one easy fact cannot inflate other facts. Existing scheduler queues, verified counts and cold-check requirements are unchanged. This supersedes the older verified-count-only bar description below. No database migration.
+
+Bar card is 40% of its former full width on desktop with a readable 320px minimum, full width on narrow screens. Retains student/assessed count/score, simplified 0/500/1000 scale and brief meaning. Both themes verified. Switch User sits directly beneath the last sidebar nav option with a 16px gap and remains available on mobile. The fact grid is always expanded for students and owners; no optional disclosure. History and session-summary averages display two decimal places, without prematurely rounding the average to milliseconds.
+
+Validation: new score tests cover all operations, wrong/slow/fast boundaries, 1501ms rounding, distinct-fact averaging, assisted answers and technical failures; full suite 125 tests. Browser sample-data QA showed 875 for all-correct 2s, a 0.76s session average, visible grid and top Switch User. Temporary fixture removed before release. No speech changes.
+
 ### Default number recognition and recorded answers (current)
 
 Number recognition (the separate local Vosk engine) now prepares automatically when PracticeApp loads, including after choosing a profile. Practice/Repeat wait while it prepares. Preparation uses the existing shared/cache-aware model loader; it does not request microphone access until practice begins. Browser recognition remains an explicit alternative and fallback on preparation failure. Generation guards prevent unmounted/Strict Mode preparations from activating stale UI. This supersedes older instructions saying number recognition is opt-in.

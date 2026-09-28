@@ -251,5 +251,16 @@ export function getProgressSummary(progress: AutomaticProgress, cards: FactCard[
   const count = (stage: LearningStage) => facts.filter(f => f.stage === stage).length;
   const cold = progress.events.filter(e => ids.has(e.factId) && e.qualifiedCold);
   const verified = count("MAINTENANCE");
-  return { total: cards.length, unassessed: count("UNASSESSED"), assessed: cards.length - count("UNASSESSED"), training: count("TRAINING"), verifying: count("VERIFYING"), verified, due: facts.filter(f => f.dueAt !== null && f.dueAt <= now).length, everVerified: facts.filter(f => f.everVerifiedAutomatic).length, coldChecks: cold.length, coldCorrectPercent: cold.length ? Math.round(cold.filter(e => e.correct && e.firstAnswerCorrect).length / cold.length * 100) : null, coldAutomaticPercent: cold.length ? Math.round(cold.filter(e => e.result === "FAST_CORRECT").length / cold.length * 100) : null, score: cards.length ? Math.round(verified / cards.length * 1000) : 0 };
+  // Display progress independently from later cold-check verification. A correct
+  // first answer earns half credit, with the other half proportional to speed.
+  // Use each fact once so repeating one easy fact cannot inflate whole-deck progress.
+  const credits = facts.map(fact => {
+    const attempt = fact.latest;
+    if (!attempt || !attempt.correct || !attempt.firstAnswerCorrect || attempt.assisted ||
+      !["FAST_CORRECT", "SLOW_CORRECT", "VERY_SLOW_CORRECT"].includes(attempt.result)) return 0;
+    return 500 + 500 * Math.min(1, C.automaticityTargetMs / Math.max(C.automaticityTargetMs, attempt.responseMs));
+  });
+  const fullCredit = credits.length > 0 && credits.every(credit => credit === 1000);
+  const score = credits.length ? Math.min(fullCredit ? 1000 : 999, Math.round(credits.reduce((sum, credit) => sum + credit, 0) / credits.length)) : 0;
+  return { total: cards.length, unassessed: count("UNASSESSED"), assessed: cards.length - count("UNASSESSED"), training: count("TRAINING"), verifying: count("VERIFYING"), verified, due: facts.filter(f => f.dueAt !== null && f.dueAt <= now).length, everVerified: facts.filter(f => f.everVerifiedAutomatic).length, coldChecks: cold.length, coldCorrectPercent: cold.length ? Math.round(cold.filter(e => e.correct && e.firstAnswerCorrect).length / cold.length * 100) : null, coldAutomaticPercent: cold.length ? Math.round(cold.filter(e => e.result === "FAST_CORRECT").length / cold.length * 100) : null, score };
 }
