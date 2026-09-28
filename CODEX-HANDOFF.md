@@ -1,6 +1,10 @@
 # Math Facts: desktop handoff
 
-Updated September 27, 2026. Read this before continuing work.
+Updated September 28, 2026. Read this before continuing work.
+
+### Eight-second celebration remixes
+
+Celebrations now last eight seconds. Five original musical arrangements (Gumdrop Bounce, Arcade Victory, Silly Parade, Bubble Waltz, Disco Blobs) and five graphical scenes (confetti, balloons, dance, rockets, fireworks) shuffle in independent bags. Each option appears once per five celebrations and no immediate repeat occurs across bag boundaries; all 25 pairings are possible. A choice is made only when finishing a qualifying set and stays stable during rendering/muting. The whole app visit shares each bag. Audio resolves with a final chord just before eight seconds. Visuals retain the licensed Blobmoji assets with distinct motion, decorations, palettes, and captions. Existing >80% completed-set rule, mute/dismiss, cleanup, and reduced-motion support remain. This supersedes the five-second duration below. No speech, grading, or database changes.
 
 ### Dark default and completion celebration
 

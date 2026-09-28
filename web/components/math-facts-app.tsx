@@ -17,7 +17,7 @@ import { SpeechTest } from "./speech-test";
 import { MasteryProgress } from "./mastery-progress";
 import { CurrentUser } from "./current-user";
 import { SessionCelebration } from "./session-celebration";
-import { prepareCelebrationAudio, shouldCelebrate } from "../lib/celebration";
+import { chooseCelebration, prepareCelebrationAudio, shouldCelebrate, type CelebrationChoice } from "../lib/celebration";
 import { NumberSpeechRecognition, prepareNumberSpeech } from "../lib/number-speech";
 import { HistorySort, historyResult, sortHistoryAttempts } from "../lib/history-sort";
 import { CardState, Operation, TIMEOUT_MS, defaultState, updateCardState } from "../lib/learning";
@@ -196,8 +196,8 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
   const [view, setView] = useState<View>(initialView);
   const [historyLocalUserId, setHistoryLocalUserId] = useState(localUserId ?? "local-default");
   const [phase, setPhase] = useState<Phase>("setup");
-  const [celebrating, setCelebrating] = useState(false);
-  const dismissCelebration = useCallback(() => setCelebrating(false), []);
+  const [celebrating, setCelebrating] = useState<CelebrationChoice | null>(null);
+  const dismissCelebration = useCallback(() => setCelebrating(null), []);
   const [operation, setOperation] = useState<Operation>("add");
   const [questionCount, setQuestionCount] = useState(50);
   const [selectedFacts, setSelectedFacts] = useState<Record<Operation, Set<string>>>(() => ({
@@ -436,7 +436,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
     const next = endAutomaticSession(auto);
     automaticityRef.current = next; setAutomaticity(next);
     const completed = sessionRecord(next)!;
-    setCelebrating(shouldCelebrate(completed.attempts, auto.session.targetCount));
+    setCelebrating(shouldCelebrate(completed.attempts, auto.session.targetCount) ? chooseCelebration() : null);
     saveProgress(statesRef.current, [completed, ...sessions.filter(s => s.id !== completed.id)]);
     setSessionNotice(notice); setPhase("results"); setCurrent(null); selectionRef.current = null;
   }, [saveProgress, sessions, stopListening]);
@@ -738,7 +738,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
     const cards = makeCards(operation).filter(card => selectedFacts[operation].has(card.id));
     if (!cards.length) return;
     prepareCelebrationAudio();
-    setCelebrating(false);
+    setCelebrating(null);
     const previous = automaticityRef.current;
     const next = previous.session && previous.session.status !== "ended"
       ? resumeAutomaticSession(previous)
@@ -894,7 +894,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
   return <AppFrame view={view} onNavigate={setView} onExit={() => setPhase("setup")} isAdmin={isAdmin} accountName={accountName}>
     {phase === "results" && currentSession ? (
       <div className="setup">
-        {celebrating && <SessionCelebration onFinished={dismissCelebration} />}
+        {celebrating && <SessionCelebration choice={celebrating} onFinished={dismissCelebration} />}
         <h1>Session complete</h1>
         {sessionNotice && <p className="notice">{sessionNotice}</p>}
         <p className="muted">A short, clean record of this practice round.</p>

@@ -211,9 +211,9 @@ input, select { min-width: 145px; background: var(--surface); border: 1px solid 
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .celebration { position: fixed; inset: 0; z-index: 30; pointer-events: none; overflow: hidden; }
 .celebration-particles { position: absolute; inset: 0; }
-.celebration-blob { position: absolute; left: var(--x); bottom: -110px; width: var(--size); height: var(--size); animation: blob-flight 4.3s var(--delay) cubic-bezier(.2,.6,.5,1) both; }
+.celebration-blob { position: absolute; left: var(--x); bottom: -110px; width: var(--size); height: var(--size); animation: blob-flight 7.3s var(--delay) cubic-bezier(.2,.6,.5,1) both; }
 .celebration-blob > span { display: block; width: 100%; height: 100%; background: center / contain no-repeat; filter: drop-shadow(0 5px 3px #0003); animation: blob-wiggle .45s ease-in-out infinite alternate; }
-.celebration-confetti { position: absolute; left: var(--x); top: -24px; width: 9px; height: 16px; border-radius: 3px; animation: celebration-rain 4.1s var(--delay) linear both; }
+.celebration-confetti { position: absolute; left: var(--x); top: -24px; width: 9px; height: 16px; border-radius: 3px; animation: celebration-rain 7.2s var(--delay) linear both; }
 .celebration-banner { position: absolute; top: 24px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 14px; width: max-content; max-width: calc(100% - 32px); padding: 14px 18px; border: 2px solid #f5c952; border-radius: 20px; color: #fff7d6; background: #332246; box-shadow: 0 10px 40px #0004; pointer-events: auto; animation: celebration-appear .25s ease-out; }
 .celebration-mascot { width: 60px; height: 60px; flex-shrink: 0; background: url('/celebration/party-blob.svg') center / contain no-repeat; }
 .celebration-banner strong { display: block; font-size: 26px; line-height: 1.2; color: #ffe17d; }
@@ -224,6 +224,28 @@ input, select { min-width: 145px; background: var(--surface); border: 1px solid 
 @keyframes blob-wiggle { from { transform: rotate(-12deg) scale(1.04,.96); } to { transform: rotate(12deg) scale(.96,1.04); } }
 @keyframes celebration-rain { from { transform: translateY(0) rotate(0); } to { transform: translate(var(--drift), calc(100dvh + 50px)) rotate(500deg); } }
 @keyframes celebration-appear { from { opacity: 0; } to { opacity: 1; } }
+.celebration[data-scene="balloons"] .celebration-blob { animation-name: balloon-flight; animation-timing-function: linear; }
+.celebration[data-scene="balloons"] .celebration-blob::before { content: ""; position: absolute; width: 100%; height: 115%; bottom: 130%; border-radius: 50% 50% 46% 46%; background: radial-gradient(circle at 30% 25%, #ffffffa8, transparent 32%), var(--color); box-shadow: inset -6px -8px 0 #0001; }
+.celebration[data-scene="balloons"] .celebration-blob::after { content: ""; position: absolute; left: 50%; bottom: 70%; width: 1px; height: 60%; background: #e7dfff; }
+.celebration[data-scene="balloons"] .celebration-confetti { width: 12px; height: 12px; border-radius: 50%; opacity: .65; }
+.celebration[data-scene="balloons"] .celebration-banner { background: #3c254b; border-color: #ffacd0; }
+.celebration[data-scene="dance"] .celebration-backdrop { position: absolute; inset: 55% 0 0; background: radial-gradient(ellipse at 15% 100%, #a445b62b, transparent 45%), radial-gradient(ellipse at 80% 100%, #36acaf35, transparent 50%); }
+.celebration[data-scene="dance"] .celebration-blob { bottom: 8%; animation: blob-dance 1.2s var(--delay) ease-in-out infinite; }
+.celebration[data-scene="dance"] .celebration-blob:nth-child(even) { bottom: 24%; }
+.celebration[data-scene="dance"] .celebration-confetti { top: var(--y); width: 14px; height: 14px; border-radius: 50%; animation: party-sparkle 1.8s var(--delay) ease-in-out infinite; }
+.celebration[data-scene="dance"] .celebration-banner { background: #302149; border-color: #cf9bff; }
+.celebration[data-scene="rockets"] .celebration-blob { left: -110px; top: var(--y); bottom: auto; animation: rocket-flight 3.7s var(--delay) ease-in infinite both; }
+.celebration[data-scene="rockets"] .celebration-blob::before { content: ""; position: absolute; width: 110%; height: 40%; right: 65%; top: 50%; border-radius: 100% 0 0 100%; background: linear-gradient(90deg, transparent, #ff9057, #ffe6a1); transform: rotate(-20deg); }
+.celebration[data-scene="rockets"] .celebration-confetti { top: var(--y); width: 9px; height: 9px; clip-path: polygon(50% 0, 65% 35%, 100% 50%, 65% 65%, 50% 100%, 35% 65%, 0 50%, 35% 35%); animation: party-sparkle 2s var(--delay) ease-in-out infinite; }
+.celebration[data-scene="rockets"] .celebration-banner { background: #192f4b; border-color: #9bdbff; }
+.celebration[data-scene="fireworks"] .celebration-blob { left: var(--origin-x); top: var(--origin-y); bottom: auto; animation: blob-burst 2.45s var(--delay) ease-out infinite both; }
+.celebration[data-scene="fireworks"] .celebration-confetti { top: var(--y); width: 7px; height: 7px; border-radius: 50%; box-shadow: 0 0 12px currentColor; animation: party-sparkle 2.45s var(--delay) ease-out infinite; }
+.celebration[data-scene="fireworks"] .celebration-banner { background: #39263d; border-color: #ffb6c9; }
+@keyframes balloon-flight { 0% { transform: translate(-50%, 80px) rotate(-8deg); opacity: 0; } 8% { opacity: 1; } 50% { transform: translate(calc(-50% + var(--drift)), -50dvh) rotate(8deg); } 90% { opacity: 1; } 100% { transform: translate(-50%, calc(-100dvh - 180px)) rotate(-8deg); opacity: 0; } }
+@keyframes blob-dance { 0%, 100% { transform: translate(-50%, 0) rotate(-14deg) scale(1.08,.92); } 40% { transform: translate(-50%, -65px) rotate(14deg) scale(.95,1.05); } 75% { transform: translate(-50%, -10px) rotate(-8deg); } }
+@keyframes rocket-flight { 0% { transform: translate(0, 18dvh) rotate(-25deg); opacity: 0; } 10% { opacity: 1; } 90% { opacity: 1; } 100% { transform: translate(calc(100vw + 240px), -45dvh) rotate(15deg); opacity: 0; } }
+@keyframes blob-burst { 0% { transform: translate(-50%, -50%) scale(.1); opacity: 0; } 15% { opacity: 1; } 65% { opacity: 1; } 100% { transform: translate(calc(-50% + var(--burst-x)), calc(-50% + var(--burst-y))) scale(1) rotate(var(--spin)); opacity: 0; } }
+@keyframes party-sparkle { 0%, 100% { opacity: .15; transform: scale(.5); } 50% { opacity: .85; transform: scale(1.15); } }
 @media (prefers-reduced-motion: reduce) {
   .celebration-particles { display: none; }
   .celebration-banner { animation: none; }
