@@ -101,22 +101,23 @@ h2 { font-size: 20px; letter-spacing: -.02em; }
 .session-settings .form-row { margin: 0; gap: 20px; }
 .session-settings .button.primary { margin-left: auto; }
 .session-settings select { min-width: 100px; }
-.mastery-progress { width: 40%; min-width: min(320px, 100%); max-width: 100%; margin-top: 24px; padding: 16px 18px; border: 1px solid #c4b5fd; border-left: 5px solid #7c3aed; border-radius: 12px; background: #f3efff; color: #35205d; }
-.mastery-progress-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.mastery-progress { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 24px; width: 100%; margin-top: 20px; padding: 12px 18px; border: 1px solid #c4b5fd; border-left: 5px solid #7c3aed; border-radius: 12px; background: #f3efff; color: #35205d; }
+.mastery-progress-heading { flex: 1 1 220px; min-width: 0; }
+.mastery-progress-meter { flex: 2 1 320px; min-width: 0; }
 .mastery-progress h3 { font-size: 18px; line-height: 1.25; margin: 0 0 5px; }
 .mastery-progress-heading p { margin: 0; font-size: 14px; color: #64517e; overflow-wrap: anywhere; }
 .mastery-progress-score { display: flex; align-items: baseline; gap: 7px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .mastery-progress-score strong { font-size: 30px; line-height: 1; letter-spacing: -1px; color: #6d28d9; }
 .mastery-progress-score span { font-size: 16px; color: #64517e; }
-.mastery-progress-track { position: relative; height: 20px; border-radius: 20px; background: #ded3f5; border: 1px solid #c2b0e1; }
+.mastery-progress-track { position: relative; height: 8px; border-radius: 20px; background: #ded3f5; border: 1px solid #c2b0e1; }
 .mastery-progress-fill { height: 100%; border-radius: inherit; background: linear-gradient(90deg, #6d28d9, #a855f7); }
-.mastery-progress-marker { position: absolute; top: 50%; transform: translate(-50%, -50%); width: 10px; height: 28px; background: #ffca55; border: 2px solid #6b4300; border-radius: 6px; }
-.mastery-progress-scale { position: relative; height: 18px; margin-top: 8px; font-size: 12px; font-weight: 700; color: #64517e; font-variant-numeric: tabular-nums; }
+.mastery-progress-marker { position: absolute; top: 50%; transform: translate(-50%, -50%); width: 8px; height: 16px; background: #ffca55; border: 2px solid #6b4300; border-radius: 6px; }
+.mastery-progress-scale { position: relative; height: 16px; margin-top: 5px; font-size: 11px; font-weight: 700; color: #64517e; font-variant-numeric: tabular-nums; }
 .mastery-progress-scale span { position: absolute; transform: translateX(-50%); }
 .mastery-progress-scale span:first-child { left: 0; transform: none; }
 .mastery-progress-scale span:nth-child(2) { left: 50%; }
 .mastery-progress-scale span:last-child { right: 0; transform: none; }
-.mastery-progress .mastery-progress-caption { margin: 12px 0 0; font-size: 13px; color: #64517e; }
+.mastery-progress .mastery-progress-caption { margin: 2px 0 0; font-size: 12px; line-height: 1.35; color: #64517e; }
 :root[data-theme="dark"] .mastery-progress { background: #292039; border-color: #675082; border-left-color: #c49aff; color: #f4edff; }
 :root[data-theme="dark"] .mastery-progress-score strong { color: #ffda7b; }
 :root[data-theme="dark"] .mastery-progress-heading p, :root[data-theme="dark"] .mastery-progress-score span, :root[data-theme="dark"] .mastery-progress-scale, :root[data-theme="dark"] .mastery-progress .mastery-progress-caption { color: #ccbbdf; }
@@ -215,7 +216,9 @@ input, select { min-width: 145px; background: var(--surface); border: 1px solid 
   .sidebar { border-right: 0; border-bottom: 1px solid var(--line); padding: 18px 20px; gap: 14px; }
   .nav { display: flex; flex-wrap: wrap; gap: 4px; }
   .account { display: none; }
-  .mastery-progress { width: 100%; }
+  .mastery-progress { gap: 12px; padding: 12px; }
+  .mastery-progress-heading { flex-basis: 150px; }
+  .mastery-progress-meter { flex-basis: 100%; }
   .main { padding: 26px 20px; }
   .stats { gap: 8px; }
   .stat { padding: 14px 10px; }

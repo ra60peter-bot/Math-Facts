@@ -2,6 +2,10 @@
 
 Updated September 27, 2026. Read this before continuing work.
 
+### Progress panel height correction
+
+The user meant to reduce HEIGHT, not width. The progress panel now spans the full available width with a compact horizontal layout: identity, score, and thin meter with scale/caption. Desktop preview at 1100px is about 74px tall; smaller screens wrap for readability. Purple/gold colors and whole-operation scoring remain unchanged. This supersedes the earlier 40%-width layout.
+
 ### Whole-subject progress scope (current clarification)
 
 The 0–1,000 progress panel now uses EVERY fact for the current operation, independent of the practice selection: addition 81, subtraction 45, multiplication 121. Its score and assessed count use getProgressSummary over allCards. The practice queue and selected-fact breakdown still use selectedCards. Deselecting difficult facts cannot raise the subject score or produce 1,000; all facts in the operation must earn full credit. Partial-credit formula and recognition/scheduling behavior are unchanged. This supersedes selected-fact scope in the progress-display section below.
