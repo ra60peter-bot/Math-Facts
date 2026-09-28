@@ -2,6 +2,10 @@
 
 Updated September 28, 2026. Read this before continuing work.
 
+### Gmail SMTP and branded invitations
+
+User selected free Gmail SMTP and created `auto.mathfacts@gmail.com` for outgoing mail. They entered/saved the credential themselves. Production Supabase now has custom SMTP enabled (`smtp.gmail.com:465`, display name Math Facts), and its Rate Limits screen confirms 30 emails/hour instead of 2. Invite user and Reset password templates are branded and saved; copies and subjects are in `email-templates/`. Existing secure ConfirmationURL links and callbacks are preserved. Recovery copy also covers invitations to existing profiles, matching `/api/invites`. No test email was sent by the assistant; actual delivery/acceptance needs a user-authorized recipient test. Administrator stays `impleader@gmail.com`. No runtime app, database, or speech changes.
+
 ### Safari microphone session recovery
 
 Safari-only number-engine audio now shares one microphone stream and a native-rate AudioContext throughout practice, avoiding repeated stop/close/reopen between questions. Each question still gets a fresh Vosk decoder/worklet, audio-clock calibration, onset detector, and reveal timestamp. Chrome/Edge retain their existing 16kHz per-question capture path; their UAs are explicitly excluded. Start/Repeat/Mic prime Safari audio in the click gesture. Session completion, early exit, profile unmount, and pagehide release the shared resources. A suspended context is resumed; ended tracks, stalled startup, permission cancellation, and interruptions are cleaned up for a fresh retry. Interrupted capture produces an unscored technical error. Native browser SpeechRecognition is unchanged; this fixes the default number-recognition engine. Safari diagnostics release capture after their test. Tests cover 50 consecutive Safari questions, independent timing, cleanup/cancel/recovery and unchanged Chrome/Edge on Windows/Mac. Real Safari/macOS hardware verification is still needed; the reported churn-related failure was not reproduced on a physical Mac here. No parser, scoring, scheduling or database changes.
