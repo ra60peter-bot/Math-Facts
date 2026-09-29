@@ -137,11 +137,11 @@ test("retry requires both time AND real unrelated completions", () => {
   h.at(anchor+15000); assert.equal(A.retryEligible(h.p,c,h.now),true);
 });
 
-test("same family and same answer cannot satisfy retry question counts, including across operations", () => {
+test("reversals count independently for retries while other same-answer facts do not", () => {
   const c=card("mul-3-2"), h=harness(); assess(h,c,100,false);
   h.attempt(card("mul-2-3")); h.attempt(card("add-3-3")); h.attempt(card("sub-8-2"));
   h.tick(20000); assert.equal(A.retryEligible(h.p,c,h.now),false);
-  h.fill(c,3); assert.equal(A.retryEligible(h.p,c,h.now),true);
+  h.fill(c,2); assert.equal(A.retryEligible(h.p,c,h.now),true);
 });
 
 test("corrective feedback end anchors the retry, not the earlier wrong response", () => {
@@ -204,10 +204,11 @@ test("new local date and DST transitions never substitute for 24 actual hours", 
   h.tick(3600000); assert.equal(A.coldEligible(h.p,c,h.now),true);
 });
 
-test("reverse-family exposure blocks cold checks without transferring achievement", () => {
+test("reverse exposure does not block a due check or transfer achievement", () => {
   const c=card("mul-7-8"),reverse=card("mul-8-7"),h=harness();assess(h,c);
   h.end();h.at(h.p.facts[c.id].dueAt);h.start();h.attempt(reverse,1000,true,"assessment");
-  assert.equal(A.coldEligible(h.p,c,h.now),false);assert.equal(h.p.facts[c.id].coldStreak,0);
+  assert.equal(A.coldEligible(h.p,c,h.now),true);assert.equal(h.p.facts[c.id].coldStreak,0);
+  assert.equal(h.select([c]).fact.id,c.id);
 });
 
 test("preceding three answers prime checks across operations; fewer than three need no warmup", () => {
@@ -296,14 +297,17 @@ test("empty queue falls back and oldest due checks precede assessments", () => {
   h.attempt(first,1300,true,"check");assert.equal(h.select().fact.id,second.id);
 });
 
-test("due cold check reserves its family before training its reverse", () => {
+test("due check and reverse training can both be selected independently", () => {
   const due=card("mul-7-8"),reverse=card("mul-8-7"),h=harness([due,reverse]);
   h.p.facts[due.id].stage="VERIFYING";h.p.facts[due.id].dueAt=BASE;
   h.p.facts[reverse.id].stage="TRAINING";
+  assert.equal(h.select().fact.id,reverse.id);
+  h.attempt(reverse,4000,false,"training");
   assert.equal(h.select().fact.id,due.id);
+  assert.equal(h.select().attemptKind,"check");
 });
 
-test("active pool respects ten/family limit and waiting training survives caps and later sessions", () => {
+test("active pool respects ten-fact limit and waiting training survives caps and later sessions", () => {
   const h=harness();const targets=makeCards("mul").filter(c=>c.a<c.b).slice(0,12);
   for(let i=0;i<targets.length;i++){const f=h.p.facts[targets[i].id];f.stage="TRAINING";f.trainingSince=BASE+i;}
   for(let i=0;i<10;i++) {const next=h.select(targets);assert.equal(next.kind,"question");h.attempt(next.fact,1000,true,next.attemptKind);}
@@ -312,11 +316,49 @@ test("active pool respects ten/family limit and waiting training survives caps a
   h.end();h.start();const next=h.select(targets);assert.ok(untouched.some(c=>c.id===next.fact.id));
 });
 
-test("identical/reversed adjacency is forbidden and alternate answers are preferred", () => {
+test("identical adjacency is forbidden while the reverse is an independent option", () => {
   const c=card("mul-3-2"),reverse=card("mul-2-3"),same=card("add-3-3"),other=card("add-2-3");
   const h=harness([c,reverse,same,other]);assess(h,c,2300);
-  assert.equal(h.select().fact.id,other.id);
-  assert.equal(h.select([c,reverse]).kind,"none");
+  assert.ok([other.id,reverse.id].includes(h.select().fact.id));
+  assert.equal(h.select([c,reverse]).fact.id,reverse.id);
+  assert.equal(h.select([c]).kind,"none");
+});
+
+test("9 × 7 masters on its own even when 7 × 9 is wrong before every check", () => {
+  const c=card("mul-9-7"),reverse=card("mul-7-9"),h=harness([c,reverse]);
+  assess(h,c);
+  for(let i=0;i<4;i++) {
+    h.end();h.at(h.p.facts[c.id].dueAt);h.start();
+    h.attempt(reverse,2300,false,"training");
+    h.p=A.beginAnswerExposure(h.p,reverse,()=>h.now);
+    assert.equal(A.coldEligible(h.p,c,h.now),true);
+    h.p=A.endAnswerExposure(h.p,()=>h.now);
+    // Persist/reload snapshots with the old shared family metadata intact.
+    h.p=JSON.parse(JSON.stringify(h.p));
+    const next=h.select([c]);assert.equal(next.attemptKind,"check");
+    h.attempt(c,1500,true,next.attemptKind);
+  }
+  assert.equal(h.p.facts[c.id].stage,"MAINTENANCE");
+  assert.equal(h.p.facts[reverse.id].stage,"TRAINING");
+  assert.equal(h.p.facts[reverse.id].coldStreak,0);
+  const earned=JSON.stringify(h.p.facts[c.id]);
+  h.end();h.start();h.attempt(reverse,4000,false,"training");
+  assert.equal(JSON.stringify(h.p.facts[c.id]),earned);
+  assert.equal(A.getProgressSummary(h.p,[c,reverse]).verified,1);
+  assert.equal(A.getProgressSummary(h.p,[c,reverse]).score,500);
+});
+
+test("addition reversals are independent and existing own exposures still enforce spacing", () => {
+  const c=card("add-9-7"),reverse=card("add-7-9"),h=harness([c,reverse]);assess(h,c);
+  h.end();h.at(h.p.facts[c.id].dueAt);h.start();h.attempt(reverse,2500,true,"assessment");
+  assert.equal(A.coldEligible(h.p,c,h.now),true);
+  h.attempt(c,1000,true,"check");
+  h.p.facts[c.id].dueAt=0;
+  assert.equal(A.coldEligible(h.p,c,h.now),false);
+  h.end();h.start();
+  h.p.facts[c.id].stage="TRAINING";h.p.facts[reverse.id].stage="TRAINING";
+  h.attempt(c,2000,true,"training");h.attempt(reverse,2000,true,"training");
+  assert.ok(h.p.session.active.includes(c.id));assert.ok(h.p.session.active.includes(reverse.id));
 });
 
 test("tiny/all-blocked decks finish explicitly and never fill with future verified facts", () => {

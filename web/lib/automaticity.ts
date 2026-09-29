@@ -39,8 +39,12 @@ export const stageLabels: Record<LearningStage, string> = { UNASSESSED: "Not ass
 
 export function answer(card: FactCard) { return card.operation === "add" ? card.a + card.b : card.operation === "sub" ? card.a - card.b : card.a * card.b; }
 export function familyId(card: FactCard) {
+  // Retained as audit metadata for existing snapshots; scheduling uses ordered IDs.
   const operands = card.operation === "sub" ? [card.a, card.b] : [Math.min(card.a, card.b), Math.max(card.a, card.b)];
   return `${card.operation}:${operands.join(":")}`;
+}
+function isReverse(card: FactCard, id: string) {
+  return card.operation !== "sub" && card.a !== card.b && id === `${card.operation}-${card.b}-${card.a}`;
 }
 export function practiceDate(at: number, timeZone: string) {
   return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(at);
@@ -88,18 +92,19 @@ export function startAutomaticSession(progress: AutomaticProgress, options: { id
 export function coldEligible(progress: AutomaticProgress, card: FactCard, now: number) {
   const fact = progress.facts[card.id];
   if (!fact || fact.dueAt === null || fact.dueAt > now) return false;
-  const family = familyId(card), date = practiceDate(now, progress.timeZone);
-  if (progress.answerExposure && familyId(progress.answerExposure.fact) === family) return false;
-  if (progress.exposures.some(e => e.familyId === family && (now - e.at < C.minimumColdGapMs || e.date === date))) return false;
+  const date = practiceDate(now, progress.timeZone);
+  if (progress.answerExposure?.fact.id === card.id) return false;
+  if (progress.exposures.some(e => e.factId === card.id && (now - e.at < C.minimumColdGapMs || e.date === date))) return false;
   // Carry recent priming across reloads/session boundaries, but yesterday's
   // last answer must not force a warm-up before today's first cold check.
-  return !progress.completions.slice(-C.recentAnswerPrimingWindow).some(e => now - e.at < C.minimumColdGapMs && e.answer === answer(card));
+  // Reversed prompts are independent, including when they share an answer.
+  return !progress.completions.slice(-C.recentAnswerPrimingWindow).some(e => now - e.at < C.minimumColdGapMs && e.answer === answer(card) && !isReverse(card, e.factId));
 }
 export function retryEligible(progress: AutomaticProgress, card: FactCard, now: number) {
   const retry = progress.facts[card.id]?.pendingRetry;
   if (!retry) return true;
   if (now - retry.anchorAt < retry.minimumElapsedMs) return false;
-  const unrelated = progress.completions.slice(retry.afterCompletion).filter(e => e.at >= retry.anchorAt && e.factId !== card.id && e.familyId !== familyId(card) && e.answer !== answer(card));
+  const unrelated = progress.completions.slice(retry.afterCompletion).filter(e => e.at >= retry.anchorAt && e.factId !== card.id && (e.answer !== answer(card) || isReverse(card, e.factId)));
   return unrelated.length >= retry.minimumUnrelatedQuestions;
 }
 export function selectNextQuestion(progress: AutomaticProgress, enabled: FactCard[], clock: Clock = Date.now, random = Math.random): Selection {
@@ -112,22 +117,22 @@ export function selectNextQuestion(progress: AutomaticProgress, enabled: FactCar
   const last = progress.exposures.filter(e => e.kind === "prompt").at(-1);
   // A fresh later visit is not adjacent to yesterday's last question.
   const adjacent = last && now - last.at < C.minimumColdGapMs ? last : null;
-  const guards = (card: FactCard) => !adjacent || (card.id !== adjacent.factId && familyId(card) !== adjacent.familyId);
+  const guards = (card: FactCard) => !adjacent || card.id !== adjacent.factId;
   const due = available.filter(card => coldEligible(progress, card, now) && guards(card));
-  const reservedFamilies = new Set(due.map(familyId));
-  const waiting = available.filter(card => progress.facts[card.id]?.stage === "TRAINING" && !reservedFamilies.has(familyId(card)));
+  const reservedFacts = new Set(due.map(card => card.id));
+  const waiting = available.filter(card => progress.facts[card.id]?.stage === "TRAINING" && !reservedFacts.has(card.id));
   const active = session.active.filter(id => waiting.some(card => card.id === id));
   const tie = new Map(cards.map(card => [card.id, random()]));
   const trainingAge = (card: FactCard) => progress.facts[card.id].latest?.completedAt ?? progress.facts[card.id].trainingSince ?? 0;
   const sortedWaiting = waiting.filter(card => !active.includes(card.id)).sort((a, b) => trainingAge(a) - trainingAge(b) || (tie.get(a.id)! - tie.get(b.id)!));
   for (const card of sortedWaiting) {
     if (active.length >= C.activeTrainingPromptLimit) break;
-    if (!active.some(id => progress.facts[id].familyId === familyId(card))) active.push(card.id);
+    active.push(card.id);
   }
   let training = waiting.filter(card => active.includes(card.id) && guards(card) && retryEligible(progress, card, now));
   let assessments = available.filter(card => progress.facts[card.id]?.stage === "UNASSESSED" && guards(card));
   let checks = due;
-  const differentAnswer = (card: FactCard) => !adjacent || answer(card) !== adjacent.answer;
+  const differentAnswer = (card: FactCard) => !adjacent || answer(card) !== adjacent.answer || isReverse(card, adjacent.factId);
   if ([...training, ...assessments, ...checks].some(differentAnswer)) {
     training = training.filter(differentAnswer); assessments = assessments.filter(differentAnswer); checks = checks.filter(differentAnswer);
   } else {
@@ -144,7 +149,7 @@ export function selectNextQuestion(progress: AutomaticProgress, enabled: FactCar
   const times = cards.flatMap(card => {
     const fact = progress.facts[card.id];
     if (!fact?.dueAt) return [];
-    const latest = Math.max(0, ...progress.exposures.filter(e => e.familyId === familyId(card)).map(e => e.at));
+    const latest = Math.max(0, ...progress.exposures.filter(e => e.factId === card.id).map(e => e.at));
     return [Math.max(fact.dueAt, latest + C.minimumColdGapMs)];
   }).filter(at => at > now);
   for (const card of waiting.filter(card => active.includes(card.id) && guards(card))) {
@@ -167,7 +172,7 @@ export function presentQuestion(progress: AutomaticProgress, selection: Extract<
   s.presentedCount++; s.allocationPosition++; s.status = "active";
   const fact = next.facts[selection.fact.id];
   s.active = s.active.filter(key => next.facts[key].stage === "TRAINING" && !s.finished.includes(key) && (s.counts[key] ?? 0) < C.maxGradedAttemptsPerFactPerSession);
-  if (selection.attemptKind === "training" && !s.active.includes(fact.id) && s.active.length < C.activeTrainingPromptLimit && !s.active.some(key => next.facts[key].familyId === fact.familyId)) s.active.push(fact.id);
+  if (selection.attemptKind === "training" && !s.active.includes(fact.id) && s.active.length < C.activeTrainingPromptLimit) s.active.push(fact.id);
   next.exposures.push({ factId: fact.id, familyId: fact.familyId, answer: answer(selection.fact), at: now, date: practiceDate(now, next.timeZone), kind: "prompt", presentationId: id });
   return next;
 }

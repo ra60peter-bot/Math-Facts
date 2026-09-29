@@ -17,7 +17,7 @@ success probability.
 - First substantive, unassisted correct answer at **≤1,500 ms** passes. Exactly
   1,500 passes; 1,501 does not. Faster passing answers earn identical schedules.
 - Existing answer window remains **4,000 ms**, separate from the speed target.
-- Active training pool: at most 10 prompts, preferring one per commutative family.
+- Active training pool: at most 10 ordered prompts; reversed facts can both be active.
 - At most 5 graded attempts of a fact per session, including assessments/checks.
 - Wrong/assisted: 3 unrelated completions **and** 15 seconds before a retry.
 - Very slow correct (>3,000 ms): 4 completions **and** 20 seconds.
@@ -32,8 +32,9 @@ success probability.
   no eligible questions. Due checks precede unassessed facts in CHECK.
 
 Cold eligibility is captured before presentation. It requires a due check, no
-family exposure for at least 24 actual hours, no family exposure on the current
-practice date, and no same answer among the last three recent completed questions.
+exposure to that exact ordered fact for at least 24 actual hours, no exposure to it on the current
+practice date, and no same answer among the last three recent completed questions
+(except its reversed version, which is independent).
 Recent same-answer history carries across operations and resumed sessions; entries
 at least 24 hours old no longer prime a new day's first question. This resolves the
 specification's requirement not to invent a three-question warm-up. Learner timezone
@@ -76,9 +77,12 @@ choose practice questions or award current verification.
 
 Existing ranges are preserved: addition 1–9 (81 ordered prompts); subtraction
 operands 1–10 with positive results only (45); multiplication 2–12 (121). IDs retain
-their existing hyphen format. Reversals of addition/multiplication share interference
-families only; achievement stays ordered and operation-specific. Subtraction remains
-ordered. Excluding facts does not delete their state.
+their existing hyphen format. Reversals of addition/multiplication are independent
+for achievement, exposure spacing, retry completion counts, adjacency and active-pool
+selection. Practicing 7 × 9 cannot delay verification or change mastery for 9 × 7.
+Other same-answer prompts still follow the existing anti-priming rules. Subtraction
+remains ordered. Excluding facts does not delete their state. Historical family IDs
+remain audit metadata; eligibility reads factId, so old snapshots need no migration.
 
 Reload resumes the original session/configuration with its caps, warm streaks,
 allocation position and pending retries. An interrupted prompt becomes ungraded

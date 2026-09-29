@@ -2,6 +2,10 @@
 
 Updated September 29, 2026. Read this before continuing work.
 
+### Independent reversed facts
+
+User explicitly wants reversed prompts independent: 9 × 7 may be mastered while 7 × 9 is not. Scores/streaks were already separate; removed reverse-family interference from cold-check exposure windows, active pools, due reservations and adjacency. Reversed completions now count independently for retry spacing and are exempt from same-answer priming; other same-answer prompts keep existing guards. Own-fact 24-hour/date spacing, due checks, four-success/seven-day mastery, caps and timing thresholds remain. Audit family IDs are retained for backward compatibility but eligibility uses ordered fact IDs, including existing snapshots; no migration or history reset. Tests exercise four passing 9 × 7 checks with wrong 7 × 9 before each, subsequent reverse failure preserving earned mastery, addition reversals, reload of shared-family snapshots, own spacing and concurrent training.
+
 ### Student progress reports in History
 
 History now has Sessions and Progress report tabs, including local/admin student-history views. Each report has a deterministic 100–200 word encouraging narrative from actual saved results, an operation selector, summary statistics, and a filterable table of every fact in that operation (81 addition, 45 subtraction, 121 multiplication). Categories: Needs practice, Correct/building speed, Fast/verifying, Mastered, Not practiced. Only the existing scheduler's MAINTENANCE stage earns Mastered; one fast answer never does. Latest results use saved scheduler evidence, with legacy history fallback; invalid/abandoned attempts are excluded. Accuracy and correct-answer averages use visible history, and comparisons use adjacent equal groups of up to three nonempty sessions. Insufficient history and declining results are described honestly. Averages show hundredths. Deleted sessions remain excluded from report aggregates, while retained scheduler mastery remains unchanged as requested earlier.
