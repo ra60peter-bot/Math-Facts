@@ -1,6 +1,14 @@
 # Math Facts: desktop handoff
 
-Updated September 28, 2026. Read this before continuing work.
+Updated September 29, 2026. Read this before continuing work.
+
+### Student progress reports in History
+
+History now has Sessions and Progress report tabs, including local/admin student-history views. Each report has a deterministic 100–200 word encouraging narrative from actual saved results, an operation selector, summary statistics, and a filterable table of every fact in that operation (81 addition, 45 subtraction, 121 multiplication). Categories: Needs practice, Correct/building speed, Fast/verifying, Mastered, Not practiced. Only the existing scheduler's MAINTENANCE stage earns Mastered; one fast answer never does. Latest results use saved scheduler evidence, with legacy history fallback; invalid/abandoned attempts are excluded. Accuracy and correct-answer averages use visible history, and comparisons use adjacent equal groups of up to three nonempty sessions. Insufficient history and declining results are described honestly. Averages show hundredths. Deleted sessions remain excluded from report aggregates, while retained scheduler mastery remains unchanged as requested earlier.
+
+The existing admin-only users endpoint includes fact snapshots and attempt audit data for its report; access checks remain intact. Student switching hides prior learner data while progress loads. No migration, scheduling, speech or scoring changes. Validation: 144 tests, lint, production build; sample-data browser checks of desktop dark/mobile light layouts, filtering, operation switching and keyboard tabs. Temporary preview route removed before build.
+
+Gmail follow-up: the user originally entered a regular Gmail password. After enabling 2-Step Verification and using a Google app password, Supabase invite requests succeeded. User confirmed email delivery works after a temporary delivery delay. No credential is stored in this repository.
 
 ### Gmail SMTP and branded invitations
 
