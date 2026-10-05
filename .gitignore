@@ -24,3 +24,6 @@ dist/
 .DS_Store
 Thumbs.db
 *.log
+
+# Local rollback archives (may include compiled server configuration)
+backups/

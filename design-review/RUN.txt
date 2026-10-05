@@ -1,0 +1,125 @@
+AUTO MATH FACTS — LOCAL DESIGN REVIEW
+
+Open PowerShell in this workspace:
+  Set-Location -LiteralPath 'C:\VIBE CODE\Math Facts Codex Web'
+
+Start or restart the review server:
+  & 'C:/Users/imple/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe' design-review/start.cjs
+
+Leave that command running. Stop it with Ctrl+C. If port 4173 is already occupied
+by the review server, use the existing server or stop it before restarting.
+The server rebuilds TypeScript changes automatically. Refresh the browser after
+editing files. HTML/CSS is served fresh without a build step.
+
+LOCAL URLS
+  http://localhost:4173/              Interactive proposed design
+  http://localhost:4173/report.html   Research, findings and implementation plan
+  http://localhost:4173/current.html  Actual current-interface replay
+  http://localhost:4173/sizes.html    Explicit-viewport rendering diagnostics
+
+VALIDATION (another PowerShell window, same workspace directory)
+
+Strict TypeScript check (no output files):
+  & 'C:/Users/imple/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe' design-review/typecheck.cjs
+
+Evidence, voice, question-order and celebration regression tests:
+  & 'C:/Users/imple/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe' --test design-review/data.test.cjs design-review/live-voice.test.cjs design-review/round-order.test.cjs design-review/round-celebration.test.cjs
+
+Build both isolated entries without starting a server:
+  & 'C:/Users/imple/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe' design-review/start.cjs --build-only
+
+Optional alternate local port (update URLs to match):
+  & 'C:/Users/imple/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe' design-review/start.cjs --port=4174
+
+REAL MICROPHONE PREVIEW
+
+Open http://localhost:4173/ directly in Chrome, Edge or Safari. Choose a preview
+student, configure the facts and round length, then follow microphone readiness
+and allow this localhost site to use your microphone. Speak one answer after
+the question appears. Answers advance automatically; use Pause or the prominent
+End round early control whenever needed. There is no typed-answer mode.
+
+The proposed design uses the same existing local number-recognition engine as
+the application. The English model is served from the existing local file
+web/public/models/english-numbers-0.15.tar.gz (41,706,172 bytes; about 40 MB).
+The first preparation may take a moment. Recognition happens in the browser;
+microphone audio is not sent to a remote speech service. No external model or
+package download is made by this review server. The browser may cache the model
+in IndexedDB. Permission must be granted on this local origin independently of
+the hosted application. Use a normal browser tab if an embedded browser cannot
+grant microphone permission. The /sizes.html iframe is for layout checks only.
+
+WHAT IS REAL / WHAT IS SIMULATED
+
+The proposed design is an isolated React prototype in design-review/. Navigation,
+fact selection, automatic advance, pause/end, results, profile controls, theme,
+preferences and local preview persistence are implemented. Real local speech
+recognition and microphone permission are connected, with the validation limit
+below. Authentication, invitation setup and starting learner
+records are simulated. Do not enter a real password. Any explicitly labeled
+design replay controls are optional simulations, not actual microphone results.
+
+LATEST MOCKUP RESTORATIONS
+
+Completed rounds with more than 80% correct again show the original eight-second
+celebration: five musical themes and five gumdrop visual scenes mix independently.
+It is enabled by default, with Mute/Dismiss and a visible reduced-motion version.
+Each child can choose one of six gumdrop avatars, saved per local preview profile.
+Selected facts now use randomized coverage cycles, avoiding neighboring facts,
+reversals and counting runs where feasible. Repeat generates a fresh sequence.
+
+Browser checks completed two simulated ten-question rounds with different orders,
+verified the animated dance celebration and Mute, and confirmed Maya's Star avatar
+persisted after reload independently of Alex's Cool avatar. These are interface
+checks, not human-voice or multi-device acoustic tests. Production is untouched.
+Screenshots: /assets/avatar-picker.png and /assets/restored-celebration.png.
+REVISED-PROTOTYPE VALIDATION
+
+The strict TypeScript check and all 45 regression tests passed, covering
+progress/evidence, mocked voice lifecycle, randomized order and celebration cleanup. The real speech
+model loaded in the rendered in-app browser, but microphone startup timed out
+after 15 seconds without capture. No successful human-voice round is claimed.
+Use a normal browser to check your microphone; model loading and mocked event
+tests do not prove acoustic accuracy, onset timing, or Safari reliability.
+
+Simulated browser journeys verified correct and wrong answers advancing
+automatically, all ten questions completing without a Next button, Pause/Resume
+excluding retry timing, and early ending saving one of ten answers. Production
+source files and data remain untouched.
+
+The current-interface comparison bundles the actual MathFactsApp component and
+its CSS, with fictional local learner records and a replacement recognizer.
+It uses the app's unconfigured local developer/owner mode, not hosted owner
+authentication. It does not claim a live child-account or microphone test.
+Open its bottom-right audit panel to select replay outcomes before pressing
+Start, Next, or Mic. Collapsing the panel restores an unobstructed comparison.
+The baseline's four-second answer window and actual app result behavior remain.
+The sizes page uses an explicit-size same-origin iframe to inspect 1280x720,
+1366x768, 1920x1080, 390x844 and 640x720 CSS-pixel layouts. Its scale-to-fit option
+does not change the child's actual layout viewport. These are rendering checks,
+not additional real browser/device tests; 640px is only a zoom/reflow proxy.
+
+Only the proposed design captures microphone audio, after browser permission.
+The current-interface replay remains a fake recognizer with microphone access
+blocked. No production API, account, email, database or student record is
+accessed or changed. The server binds only loopback, has no write API, does not
+read .env files and blocks external connections. It serves an explicit route
+list, generated JavaScript/WASM assets, the existing model and capture worklet.
+Fictional preview data and new preview rounds are saved only at this localhost
+origin. Removing a local preview profile affects that fictional data only.
+Source app files stay intact.
+
+Progress in this prototype distinguishes latest valid first spoken performance
+from spaced mastery. Retried, disputed and uncertain/estimated timing do not
+earn spoken-speed or mastery credit. Older preview records from the previous
+typed-answer design also remain excluded. The preview does not simulate a
+multi-day study or establish measured learning benefits. Real acoustic latency,
+recognition accuracy across voices/devices, Safari/Edge behavior, assistive
+technology and child usability need separate validation with participants.
+
+Existing dependencies are reused from web/node_modules; there is no new package
+installation. On another computer with Node on PATH, the equivalent commands
+are node design-review/start.cjs, node design-review/typecheck.cjs, and
+node --test design-review/data.test.cjs design-review/live-voice.test.cjs design-review/round-order.test.cjs design-review/round-celebration.test.cjs after existing project dependencies
+have been installed. Generated .build/ bundles are ignored by Git.
+

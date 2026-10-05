@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Math Facts — responsive frame diagnostics</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#17202b;color:#f2f6fc;font:14px/1.5 system-ui,sans-serif}header{position:sticky;top:0;z-index:2;background:#202d3e;border-bottom:1px solid #64819d;padding:14px 20px}h1{font-size:19px;margin:0 0 5px}p{margin:4px 0 12px;max-width:100ch;color:#cdd9e9}.controls{display:flex;gap:12px;flex-wrap:wrap;align-items:center}fieldset{border:0;display:flex;gap:6px;flex-wrap:wrap;margin:0;padding:0}legend{float:left;margin-right:8px;padding:6px 0}button,select{background:#152133;color:#f2f6fc;border:1px solid #8096b4;border-radius:6px;font:inherit;padding:7px 10px}button{cursor:pointer}button[aria-pressed=true]{background:#ffe19a;color:#16223a;border-color:#ffe19a}button:focus-visible,select:focus-visible,input:focus-visible,a:focus-visible{outline:3px solid #64dbff;outline-offset:3px}label{display:flex;gap:6px;align-items:center}a{color:#b8daff}.readout{font-variant-numeric:tabular-nums;margin:9px 0 0;color:#ffe19a}.stage{padding:20px;overflow:auto}.frame-box{position:relative;background:white;box-shadow:0 0 0 1px #7995af}iframe{display:block;position:absolute;left:0;top:0;border:0;background:white;transform-origin:top left}.links{margin-left:auto;display:flex;gap:12px}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Responsive rendering diagnostics</h1>
+    <p>This is a browser frame with an explicit CSS viewport, not a real device or additional browser test. The 640px setting is a reflow proxy, not a verified 200% zoom test. Fit-to-window changes the display scale, not the frame’s layout size.</p>
+    <div className="controls">
+      <label>Interface <select id="target"><option value="/">Proposed design</option><option value="/current.html">Current interface replay</option></select></label>
+      <fieldset aria-label="Frame viewport"><legend>Layout size</legend>
+        <button type="button" data-width="1280" data-height="720" aria-pressed="true">1280 × 720</button>
+        <button type="button" data-width="1366" data-height="768" aria-pressed="false">1366 × 768</button>
+        <button type="button" data-width="1920" data-height="1080" aria-pressed="false">1920 × 1080</button>
+        <button type="button" data-width="390" data-height="844" aria-pressed="false">390 × 844</button>
+        <button type="button" data-width="640" data-height="720" aria-pressed="false">640 × 720</button>
+      </fieldset>
+      <label><input id="fit" type="checkbox" checked>Fit display width</label>
+      <button id="reload" type="button">Reload frame</button>
+      <div className="links"><a href="/" target="_blank" rel="noreferrer">Open proposal ↗</a><a href="/report.html" target="_blank" rel="noreferrer">Review ↗</a></div>
+    </div>
+    <p className="readout" id="readout" role="status">Loading frame…</p>
+  </header>
+  <main className="stage"><div className="frame-box" id="frame-box"><iframe id="review-frame" name="review-frame" title="Proposed design at 1280 by 720 CSS pixels" width="1280" height="720" src="/"></iframe></div></main>
+  <script defer src="/sizes.js"></script>
+</body>
+</html>

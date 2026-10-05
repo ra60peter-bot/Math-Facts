@@ -20,6 +20,7 @@ export type AttemptEvent = {
   presentedAt: number; completedAt: number; responseMs: number; correct: boolean; assisted: boolean;
   firstAnswerCorrect: boolean; kind: AttemptKind; coldEligible: boolean; qualifiedCold: boolean;
   result: ResultClass | "INVALID" | "ABANDONED"; heard: string;
+  timingReliable?: boolean; retry?: boolean; disputed?: boolean;
 };
 export type AutomaticSession = {
   id: string; startedAt: number; endedAt: number | null; operation: Operation; factIds: string[]; targetCount: number;
@@ -143,6 +144,20 @@ export function selectNextQuestion(progress: AutomaticProgress, enabled: FactCar
   training.sort((a, b) => (progress.facts[a.id].pendingRetry?.anchorAt ?? trainingAge(a)) - (progress.facts[b.id].pendingRetry?.anchorAt ?? trainingAge(b)) || (tie.get(a.id)! - tie.get(b.id)!));
   checks.sort((a, b) => progress.facts[a.id].dueAt! - progress.facts[b.id].dueAt! || (tie.get(a.id)! - tie.get(b.id)!));
   assessments.sort((a, b) => session.coverageOrder.indexOf(a.id) - session.coverageOrder.indexOf(b.id));
+  // Avoid ordered runs such as 3×3, 3×4, 3×5, while preserving the
+  // scheduler's training/check allocation and every eligibility guard.
+  const lastCards = progress.completions.slice(-2).map(e => ({ id: e.factId, answer: e.answer, parts: e.factId.split("-") }));
+  const predictable = (card: FactCard) => {
+    const previous = lastCards.at(-1);
+    if (!previous) return false;
+    const a = Number(previous.parts[1]), b = Number(previous.parts[2]);
+    const neighbor = card.operation === "mul" && ((card.a === a && Math.abs(card.b - b) === 1) || (card.b === b && Math.abs(card.a - a) === 1));
+    const reverse = card.operation !== "sub" && card.a === b && card.b === a;
+    const run = lastCards.length === 2 && answer(card) - previous.answer === previous.answer - lastCards[0].answer;
+    return neighbor || reverse || run;
+  };
+  const mix = (pool: FactCard[]) => [...pool.filter(c => !predictable(c)), ...pool.filter(predictable)];
+  training = mix(training); checks = mix(checks); assessments = mix(assessments);
   const check = checks[0] ?? assessments[0];
   const preferred = C.allocation[session.allocationPosition % C.allocation.length];
   const chosen = preferred === "TRAINING" ? training[0] ?? check : check ?? training[0];
@@ -153,7 +168,7 @@ export function selectNextQuestion(progress: AutomaticProgress, enabled: FactCar
   const alternatives = cards.filter(guards);
   const practice = alternatives.length ? alternatives : cards;
   practice.sort((a, b) => (session.counts[a.id] ?? 0) - (session.counts[b.id] ?? 0)
-    || trainingAge(a) - trainingAge(b) || (tie.get(a.id)! - tie.get(b.id)!));
+    || Number(predictable(a)) - Number(predictable(b)) || (tie.get(a.id)! - tie.get(b.id)!));
   if (practice[0]) return { kind: "question", fact: practice[0], attemptKind: "extra" };
   return { kind: "none", reason: "Choose at least one fact to practice.", nextUsefulAt: null };
 }
@@ -175,7 +190,7 @@ export function presentQuestion(progress: AutomaticProgress, selection: Extract<
   next.exposures.push({ factId: fact.id, familyId: fact.familyId, answer: answer(selection.fact), at: now, date: practiceDate(now, next.timeZone), kind: "prompt", presentationId: id });
   return next;
 }
-export type AttemptInput = { presentationId: string; correct: boolean; responseMs: number; assisted?: boolean; firstAnswerCorrect?: boolean; timeout?: boolean; invalid?: boolean; abandoned?: boolean; heard?: string };
+export type AttemptInput = { presentationId: string; correct: boolean; responseMs: number; assisted?: boolean; firstAnswerCorrect?: boolean; timeout?: boolean; invalid?: boolean; abandoned?: boolean; heard?: string; timingReliable?: boolean; retry?: boolean; disputed?: boolean };
 export function applyAttemptResult(progress: AutomaticProgress, input: AttemptInput, clock: Clock = Date.now): AutomaticProgress {
   const session = progress.session, presentation = session?.current;
   if (!session || session.status === "ended" || !presentation || presentation.id !== input.presentationId || progress.events.some(e => e.id === input.presentationId)) return progress;
@@ -184,9 +199,16 @@ export function applyAttemptResult(progress: AutomaticProgress, input: AttemptIn
   const result = invalid ? "INVALID" : input.abandoned ? "ABANDONED" : classifyResult(input);
   const event: AttemptEvent = { id: presentation.id, learnerId: next.learnerId, sessionId: s.id, factId: fact.id, familyId: fact.familyId, answer: answer(presentation.fact), presentedAt: presentation.presentedAt, completedAt: now, responseMs: Number.isFinite(input.responseMs) ? Math.max(0, input.responseMs) : 0, correct: input.correct, firstAnswerCorrect: input.firstAnswerCorrect ?? input.correct, assisted: Boolean(input.assisted), kind: presentation.kind, coldEligible: presentation.coldEligible, qualifiedCold: presentation.coldEligible && !input.assisted && !invalid && !input.abandoned, result, heard: input.heard ?? "" };
   next.events.push(event); s.current = null;
+  if (input.timingReliable === false) event.timingReliable = false;
+  if (input.retry) event.retry = true;
+  if (input.disputed) event.disputed = true;
+  if (event.timingReliable === false || event.retry || event.disputed) event.qualifiedCold = false;
   if (result === "INVALID" || result === "ABANDONED") return next;
   s.counts[fact.id] = (s.counts[fact.id] ?? 0) + 1; s.gradedCount++;
   next.completions.push({ factId: fact.id, familyId: fact.familyId, answer: event.answer, at: now });
+  // Keep these attempts in history without awarding or removing mastery from
+  // a retry, uncertain measurement, or a reported recognition mistake.
+  if (event.retry || event.disputed || event.timingReliable === false) return next;
   fact.latest = event;
   if (result !== "FAST_CORRECT") {
     s.finished = s.finished.filter(id => id !== fact.id);

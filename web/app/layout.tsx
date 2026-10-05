@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import { ThemeToggle } from "../components/theme-toggle";
 import "./globals.css";
+import "./redesign.css";
 
 export const metadata: Metadata = {
-  title: "Math Facts",
-  description: "Voice-first addition and multiplication practice.",
+  title: "Auto Math Facts",
+  description: "Voice practice for addition, subtraction, and multiplication.",
   manifest: "/manifest.webmanifest",
 };
 

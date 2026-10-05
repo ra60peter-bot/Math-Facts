@@ -6,6 +6,8 @@ import ts from 'typescript';
 import {createElement,Fragment} from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 const source=fs.readFileSync(new URL('../components/math-facts-app.tsx',import.meta.url),'utf8');
+const metricExports={};
+vm.runInNewContext(ts.transpileModule(fs.readFileSync(new URL('../lib/practice-metrics.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports:metricExports});
 const compile=code=>ts.transpileModule(code,{fileName:'test.tsx',compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React,target:ts.ScriptTarget.ES2020}}).outputText;
 function startup(){
  const states=[],effects=[];let resolve,reject,supported;
@@ -35,7 +37,7 @@ test('expanded history shows the original wrong answer, correct answers, and mis
  let state=0;
  const exports={};
  const history=source.slice(source.indexOf('function SessionHistory('),source.indexOf('async function accountRequest('));
- vm.runInNewContext(compile(history+'\n exports.SessionHistory=SessionHistory;'),{exports,React:{createElement,Fragment},Fragment,
+ vm.runInNewContext(compile(history+'\n exports.SessionHistory=SessionHistory;'),{exports,...metricExports,React:{createElement,Fragment},Fragment,
   useState:initial=>[++state===2?'session':initial,()=>{}],useId:()=> 'history',operationLabel:()=> 'Multiplication',
   sortHistoryAttempts:attempts=>attempts.map((attempt,index)=>({attempt,questionNumber:index+1})),historyResult:a=>a.answerCorrect?'correct':'wrong',
  });

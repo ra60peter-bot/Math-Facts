@@ -12,9 +12,9 @@ export const VISUAL_SCENES: Record<VisualTheme, { caption: string; mascot: strin
   fireworks: { caption: "A whole sky of hoorays!", mascot: "party-blob", colors: ["#ffd96a", "#ff8fa9", "#a5e7ff", "#d7adff"] },
 };
 
-export function SessionCelebration({ choice, onFinished }: { choice: CelebrationChoice; onFinished: () => void }) {
+export function SessionCelebration({ choice, onFinished, sound = true, motion = true }: { choice: CelebrationChoice; onFinished: () => void; sound?: boolean; motion?: boolean }) {
   const scene = VISUAL_SCENES[choice.visual];
-  const [muted, setMuted] = useState(false);
+  const [muted, setMuted] = useState(!sound);
   useEffect(() => {
     const timer = window.setTimeout(onFinished, CELEBRATION_MS);
     return () => window.clearTimeout(timer);
@@ -23,7 +23,7 @@ export function SessionCelebration({ choice, onFinished }: { choice: Celebration
     if (!muted) return playCelebrationMusic(choice.music);
   }, [muted, choice.music]);
 
-  return <div className="celebration" data-scene={choice.visual} aria-label="Session celebration">
+  return <div className="celebration" data-scene={choice.visual} data-motion={motion ? "on" : "off"} aria-label="Session celebration">
     <div className="celebration-particles" aria-hidden="true">
       <div className="celebration-backdrop" />
       {Array.from({ length: 15 }, (_, i) => <span key={i} className="celebration-blob" style={{

@@ -6,7 +6,7 @@ import type { User } from "@supabase/supabase-js";
 import { FactCard, answerFor, makeCards } from "../lib/cards";
 import { loadCloudProgress, loadVoiceMappings, saveVoiceMapping, syncCloudProgress, queueProgressWrite, rememberUploadedSessions, mergePendingSessions } from "../lib/cloud-progress";
 import { AUTOMATICITY_CONFIG } from "../lib/automaticity-config";
-import { createAutomaticProgress, startAutomaticSession, resumeAutomaticSession, endAutomaticSession, selectNextQuestion, presentQuestion, applyAttemptResult, beginAnswerExposure, endAnswerExposure, getProgressSummary, stageLabels, type AutomaticProgress, type AttemptEvent, type Selection } from "../lib/automaticity";
+import { createAutomaticProgress, startAutomaticSession, resumeAutomaticSession, endAutomaticSession, selectNextQuestion, presentQuestion, applyAttemptResult, beginAnswerExposure, endAnswerExposure, getProgressSummary, pauseAutomaticSession, type AutomaticProgress, type AttemptEvent, type Selection } from "../lib/automaticity";
 import { LocalSpeechStatus, prepareLocalSpeech } from "../lib/local-speech";
 import type { BrowserSpeechRecognition, BrowserSpeechRecognitionEvent, BrowserSpeechRecognitionErrorEvent } from "../lib/browser-speech";
 import { SPEECH_RESULT_GRACE_MS } from "../lib/browser-speech";
@@ -15,6 +15,11 @@ import { ProfileGate, ProfileContext, type AccessStudent } from "./profile-gate"
 import { accessRequest } from "../lib/access-client";
 import { SpeechTest } from "./speech-test";
 import { MasteryProgress } from "./mastery-progress";
+import { MicrophoneCheck } from "./microphone-check";
+import { StudentAvatar } from "./student-avatar";
+import { PracticeDialog } from "./practice-dialog";
+import { defaultPreferences, readPreferences, PREFERENCES_KEY, microphoneConfirmed } from "../lib/practice-preferences";
+import { hasComparableTime, practiceMetrics } from "../lib/practice-metrics";
 import { CurrentUser } from "./current-user";
 import { HistoryProgress } from "./history-progress";
 import { SessionCelebration } from "./session-celebration";
@@ -26,8 +31,8 @@ import { CardState, Operation, TIMEOUT_MS, defaultState, updateCardState } from 
 import { parseSpokenNumber } from "../lib/number-parser";
 import { hasSupabaseConfig, supabaseBrowser } from "../lib/supabase-browser";
 
-type View = "practice" | "history" | "students" | "users";
-type Phase = "setup" | "practice" | "results";
+type View = "practice" | "history" | "progress" | "students" | "users" | "microphone";
+type Phase = "setup" | "practice" | "results" | "mic-check";
 type Attempt = { id: string; fact: string; operation: Operation; correct: boolean; answerCorrect: boolean; responseMs: number; heard: string; at: string; audit?: AttemptEvent };
 type SavedSession = { id: string; operation: Operation; startedAt: string; endedAt: string; attempts: Attempt[] };
 type Persisted = { states: Record<string, CardState>; sessions: SavedSession[]; automaticity?: AutomaticProgress | null };
@@ -117,12 +122,13 @@ export function MathFactsApp() {
     key={`${session.profile.id}:${session.student?.id ?? "owner"}`}
     cloudUser={{id:session.profile.id,email:session.profile.email} as User}
     account={session.profile} student={session.student}
-    initialView={session.onboarding ? "students" : "practice"}
+    initialView={session.mode === "owner" ? "students" : "practice"}
   />}</ProfileGate>;
 }
 
 function LocalMode() {
   const [users, setUsers] = useState<LocalUser[]>([DEFAULT_LOCAL_USER]);
+  const [choosing, setChoosing] = useState(true);
   const [activeUserId, setActiveUserId] = useState(DEFAULT_LOCAL_USER.id);
 
   useEffect(() => {
@@ -155,12 +161,13 @@ function LocalMode() {
   };
 
   const selectUser = (userId: string) => {
-    setActiveUserId(userId);
+    setActiveUserId(userId); setChoosing(false);
     localStorage.setItem(LOCAL_ACTIVE_USER_KEY, userId);
   };
 
   const activeUser = users.find((user) => user.id === activeUserId) ?? users[0];
-  return <PracticeApp
+  if (choosing) return <main className="identity-page"><div className="identity-panel"><p className="eyebrow">Auto Math Facts</p><h1>Who’s practicing?</h1><p className="muted">Choose your name. A little practice goes a long way.</p><div className="student-picker">{users.map(user => <button className="identity-card" key={user.id} onClick={() => selectUser(user.id)}><StudentAvatar studentId={user.id} name={user.name}/><strong>{user.name}</strong><small>Let’s practice →</small></button>)}</div><p className="fine-print">Local profiles · saved on this computer</p></div></main>;
+  return <ProfileContext.Provider value={{student:false,switchPerson:()=>setChoosing(true)}}><PracticeApp
     key={activeUser.id}
     cloudUser={null}
     isAdmin
@@ -170,7 +177,7 @@ function LocalMode() {
     onAddLocalUser={addUser}
     onDeleteLocalUser={deleteUser}
     onSelectLocalUser={selectUser}
-  />;
+  /></ProfileContext.Provider>;
 }
 
 type PracticeAppProps = {
@@ -197,6 +204,14 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
   const progressAccountId = cloudUser ? (activeStudent?.ownerId ?? cloudUser.id) : "";
   const [view, setView] = useState<View>(initialView);
   const [historyLocalUserId, setHistoryLocalUserId] = useState(localUserId ?? "local-default");
+  const [preferences, setPreferences] = useState(defaultPreferences);
+  const [comfortOpen, setComfortOpen] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const retryRef = useRef(false);
+  const beforeAnswerRef = useRef<AutomaticProgress | null>(null);
+  const pausedFeedbackRef = useRef(false);
+  const microphonePassedRef = useRef(false);
+  useEffect(() => { setPreferences(readPreferences()); microphonePassedRef.current = microphoneConfirmed(); }, []);
   const [phase, setPhase] = useState<Phase>("setup");
   const [celebrating, setCelebrating] = useState<CelebrationChoice | null>(null);
   const dismissCelebration = useCallback(() => setCelebrating(null), []);
@@ -270,6 +285,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
     localSpeechPreparationRef.current = pending;
     return pending;
   }, []);
+  const [recognitionFailed, setRecognitionFailed] = useState(false);
   const [questionReady, setQuestionReady] = useState(false);
 
   const loadStudents = useCallback(async () => {
@@ -436,10 +452,12 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
     releaseSafariNumberAudio();
     const auto = automaticityRef.current;
     if (!auto?.session || auto.session.status === "ended") return;
+    if (nextRef.current !== null) window.clearTimeout(nextRef.current);
+    setPaused(false);
     const next = endAutomaticSession(auto);
     automaticityRef.current = next; setAutomaticity(next);
     const completed = sessionRecord(next)!;
-    setCelebrating(shouldCelebrate(completed.attempts, auto.session.targetCount) ? chooseCelebration() : null);
+    setCelebrating(completed.attempts.length >= auto.session.targetCount && shouldCelebrate(practiceMetrics(completed.attempts).scored, practiceMetrics(completed.attempts).scored.length) ? chooseCelebration() : null);
     saveProgress(statesRef.current, [completed, ...sessions.filter(s => s.id !== completed.id)]);
     setSessionNotice(notice); setPhase("results"); setCurrent(null); selectionRef.current = null;
   }, [saveProgress, sessions, stopListening]);
@@ -452,10 +470,11 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
     const enabled = makeCards(prepared.session!.operation).filter(card => prepared.session!.factIds.includes(card.id));
     const choice = selectNextQuestion(prepared, enabled);
     if (choice.kind === "none") {
-      finishSession(choice.reason + (choice.nextUsefulAt ? ` Next useful review: ${new Date(choice.nextUsefulAt).toLocaleString()}.` : ""));
+      finishSession(prepared.session!.gradedCount >= prepared.session!.targetCount ? "" : choice.reason + (choice.nextUsefulAt ? ` Next useful review: ${new Date(choice.nextUsefulAt).toLocaleString()}.` : ""));
       return;
     }
-    selectionRef.current = choice;
+    selectionRef.current = choice; retryRef.current = false;
+    setListenState("Opening microphone…");
     setCurrent(choice.fact); setPendingWrong(null); setQuestionReady(false); setHeard(""); setResult(null);
     setProgress(prepared.session!.gradedCount);
     nextRef.current = window.setTimeout(() => startListeningRef.current(choice.fact), 100);
@@ -472,39 +491,47 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
       if (!auto || !presentation) return;
       persistAutomaticity(applyAttemptResult(auto, { presentationId: presentation.id, correct: false, responseMs: 0, invalid: true, heard: reason }));
       // A technical retry is a new exposure, never a second cold check.
+      retryRef.current = true;
       if (selectionRef.current?.attemptKind === "check") selectionRef.current = { ...selectionRef.current, attemptKind: "extra" };
     };
   }, [persistAutomaticity]);
 
-  const handleResponse = useCallback((card: FactCard, transcript: string, parsed: number | null, responseMs: number) => {
+  const handleResponse = useCallback((card: FactCard, transcript: string, parsed: number | null, responseMs: number, timingReliable = true) => {
     const auto = automaticityRef.current, presentation = auto?.session?.current;
     if (answerHandledRef.current || !auto || !presentation || presentation.fact.id !== card.id) return;
     answerHandledRef.current = true;
     stopListening();
     const answerCorrect = parsed === answerFor(card);
-    const passed = answerCorrect && responseMs <= AUTOMATICITY_CONFIG.automaticityTargetMs;
-    let next = applyAttemptResult(auto, { presentationId: presentation.id, correct: answerCorrect, firstAnswerCorrect: answerCorrect, responseMs, timeout: parsed === null, heard: transcript });
+    const comparable = timingReliable && !retryRef.current;
+    const passed = answerCorrect && comparable && responseMs <= AUTOMATICITY_CONFIG.automaticityTargetMs;
+    beforeAnswerRef.current = auto;
+    let next = applyAttemptResult(auto, { presentationId: presentation.id, correct: answerCorrect, firstAnswerCorrect: answerCorrect, responseMs, timeout: parsed === null, heard: transcript, timingReliable, retry: retryRef.current });
     if (next === auto) return;
     const audit = next.events.at(-1)!;
     // Legacy metrics remain available for historical views. They no longer select
     // questions or award mastery; both fast speeds receive the same grade.
     const previousState = statesRef.current[card.id] ?? defaultState(card.id);
     const nextState = updateCardState(previousState, !answerCorrect ? "again" : passed ? "good" : "hard", responseMs);
-    statesRef.current = { ...statesRef.current, [card.id]: nextState }; setStates(statesRef.current);
+    if (comparable) { statesRef.current = { ...statesRef.current, [card.id]: nextState }; setStates(statesRef.current); }
     setHeard(transcript || "No answer heard"); setListenState("");
-    const elapsed = `${(responseMs / 1000).toFixed(1)} seconds`;
-    setResult(passed ? { text: `Correct! Within target · ${elapsed}`, tone: "good" }
-      : answerCorrect ? { text: `Correct; needs speed practice · ${elapsed}`, tone: "slow" }
-      : { text: `Incorrect · ${elapsed}`, tone: "wrong", correctAnswer: answerFor(card) });
+    const elapsed = comparable && preferences.showTimes ? ` · ${(responseMs / 1000).toFixed(2)} seconds` : "";
+    setResult(passed ? { text: `Correct!${elapsed}`, tone: "good" }
+      : answerCorrect ? { text: comparable ? `Slow!${elapsed}` : "Correct!", tone: comparable ? "slow" : "good" }
+      : { text: `Wrong!${elapsed}`, tone: "wrong", correctAnswer: answerFor(card) });
+    if (!comparable) setListenState(retryRef.current ? "Retry practice · no speed or mastery result" : "Answer recorded · timing unavailable");
+    if (answerCorrect && preferences.successSound) {
+      try { const context = new AudioContext(), tone = context.createOscillator(), gain = context.createGain(); tone.frequency.value = 660; gain.gain.setValueAtTime(.035, context.currentTime); gain.gain.exponentialRampToValueAtTime(.0001, context.currentTime + .17); tone.connect(gain).connect(context.destination); tone.start(); tone.stop(context.currentTime + .18); tone.onended = () => void context.close(); } catch { /* Feedback never blocks practice. */ }
+    }
     const attempt: Attempt = { id: audit.id, fact: `${card.a} ${operationSymbol(card.operation)} ${card.b}`, operation: card.operation, correct: answerCorrect, answerCorrect, responseMs, heard: transcript, at: new Date(audit.completedAt).toISOString(), audit };
     attemptsRef.current = [...attemptsRef.current, attempt];
     setProgress(next.session!.gradedCount);
     if (!answerCorrect) {
       next = beginAnswerExposure(next, card);
       setPendingWrong({ card, transcript, responseMs, attemptId: audit.id, previousState });
-    } else nextRef.current = window.setTimeout(advance, passed ? 950 : 1450);
+    }
+    nextRef.current = window.setTimeout(advance, !answerCorrect ? 4000 : passed ? 1200 : 1800);
     persistAutomaticity(next);
-  }, [advance, persistAutomaticity, stopListening]);
+  }, [advance, persistAutomaticity, stopListening, preferences]);
 
   const startListening = useCallback((card: FactCard) => {
     const Recognition = numberSpeechActiveRef.current ? NumberSpeechRecognition : window.SpeechRecognition ?? window.webkitSpeechRecognition;
@@ -515,7 +542,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
     setQuestionReady(false);
     setHeard("");
     setResult(null);
-    setListenState("Starting microphone…");
+    setListenState("Starting microphone…"); setRecognitionFailed(false);
     setSpeechReport("");
     const recognitionStartedAt = performance.now();
     const trace = [`Practice speech v4 · ${numberSpeechActiveRef.current ? "number engine (Vosk)" : localSpeechReadyRef.current ? "on-device" : "browser"}`, navigator.userAgent];
@@ -534,6 +561,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
     let numberHints = addNumberHints(recognition, window.SpeechRecognitionPhrase);
     let retryWithoutHints = false;
     let latestTranscript = "";
+    let latestNumberFinal = false;
     let latestResponseMs = TIMEOUT_MS;
     let firstNumberAt: number | null = null;
     let timingEstimated = false;
@@ -545,6 +573,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
     const isActive = () => recognitionRef.current === recognition && !answerHandledRef.current;
     const fail = (message: string) => {
       if (!isActive()) return;
+      setRecognitionFailed(true);
       log(`Not scored: ${message}`);
       recordInvalidRef.current(message);
       setSpeechReport(trace.join("\n"));
@@ -574,15 +603,16 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
         fail("Words were heard, but no number was recognized. Tap Mic to retry. No answer was scored.");
         return;
       }
-      if (recognition.usesWordTiming && soundResponseMsRef.current === null) {
+      if (recognition.usesWordTiming && !latestNumberFinal) { fail("The number was not finished. Tap Mic to retry. No answer was scored."); return; }
+      if (soundResponseMsRef.current === null) {
         // Keep the understood answer. An unavailable acoustic boundary must
         // not invent a zero time; transcript arrival is an explicit estimate.
         latestResponseMs = Math.min(Math.max(0, Math.round((firstNumberAt ?? performance.now()) - questionStartRef.current)), TIMEOUT_MS);
         timingEstimated = true;
         log("Speech onset unavailable; response time estimated from first numeric transcript");
       }
-      handleResponse(card, latestTranscript, parsed, latestTranscript ? latestResponseMs : TIMEOUT_MS);
-      if (timingEstimated) setListenState("Answer recorded — response time estimated from recognition");
+      handleResponse(card, latestTranscript, parsed, latestTranscript ? latestResponseMs : TIMEOUT_MS, !timingEstimated);
+      if (timingEstimated) setListenState("Answer recorded · timing unavailable");
     };
     const answerDeadline = () => {
       if (!isActive()) return;
@@ -652,7 +682,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
         // Word boundaries are estimates. Do not reject an understood answer
         // because of a clock/boundary mismatch, or turn it into a zero score.
         const measured = onset - questionStartRef.current;
-        soundResponseMsRef.current = measured >= 50
+        soundResponseMsRef.current = measured >= 50 && measured <= TIMEOUT_MS
           ? Math.min(Math.round(measured), TIMEOUT_MS)
           : null;
         if (measured < 50) log("Zero/early word boundary rejected as a reliable response time");
@@ -663,6 +693,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
       // the same number. A revised number gets its own arrival time.
       if (!sameNumber) latestResponseMs = soundResponseMsRef.current ?? Math.min(Math.round(performance.now() - questionStartRef.current), TIMEOUT_MS);
       latestTranscript = transcript;
+      latestNumberFinal = Boolean(event.results[event.results.length - 1]?.isFinal && parsedNumber !== null);
       setHeard(transcript);
       // "Final" can mark only a segment such as "the answer is". Keep
       // listening until a number arrives; a finalized prefix is not wrong.
@@ -673,13 +704,13 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
         // save an attempt yet: a partial "twenty" can still become "twenty eight".
         const parsed = parseSpokenNumber(transcript, voiceMappingsRef.current);
         const correct = parsed === answerFor(card);
-        const elapsed = `${(latestResponseMs / 1000).toFixed(1)} seconds`;
-        const awaitingTiming = recognition.usesWordTiming && soundResponseMsRef.current === null;
+        const elapsed = preferences.showTimes && !retryRef.current ? ` · ${(latestResponseMs / 1000).toFixed(2)} seconds` : "";
+        const awaitingTiming = retryRef.current || soundResponseMsRef.current === null;
         // A partial "one" can still become "one oh eight". Only a completed
         // answer may show Wrong; matching interim answers stay responsive.
         setResult(!correct ? null : awaitingTiming
           ? { text: "Correct!", tone: "good" }
-          : { text: `${latestResponseMs <= AUTOMATICITY_CONFIG.automaticityTargetMs ? "Correct!" : "Correct; needs speed practice ·"} ${elapsed}`, tone: latestResponseMs <= AUTOMATICITY_CONFIG.automaticityTargetMs ? "good" : "slow" });
+          : { text: `${latestResponseMs <= AUTOMATICITY_CONFIG.automaticityTargetMs ? "Correct!" : "Slow!"}${elapsed}`, tone: latestResponseMs <= AUTOMATICITY_CONFIG.automaticityTargetMs ? "good" : "slow" });
         if (!correct) setListenState("Listening — finishing your answer…");
       }
     };
@@ -727,21 +758,22 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
         // give extra answer time or record a second attempt.
         try { recognition.start(); }
         catch { fail("Microphone stopped. Tap Mic to retry."); }
-      } else setListenState("No speech detected — tap Mic to retry");
+      } else { setRecognitionFailed(true); setListenState("No speech detected — tap Mic to retry"); }
     };
     recognitionRef.current = recognition;
     // Startup failures do not count as a student's answer or consume answer time.
     timeoutRef.current = window.setTimeout(() => fail("Microphone did not start. Tap Mic to retry."), TIMEOUT_MS);
     try { recognition.start(); }
     catch { fail("Microphone could not start. Tap Mic to retry."); }
-  }, [handleResponse, stopListening]);
+  }, [handleResponse, stopListening, preferences.showTimes]);
   useEffect(() => { startListeningRef.current = startListening; }, [startListening]);
 
-  const startPractice = () => {
+  const startPractice = (checked = false) => {
     if (!speechSupported || numberSpeechStatus === "loading" || !progressReady || !automaticityRef.current) return;
     const cards = makeCards(operation).filter(card => selectedFacts[operation].has(card.id));
     if (!cards.length) return;
-    prepareCelebrationAudio();
+    if (!checked && !microphonePassedRef.current && !microphoneConfirmed()) { setPhase("mic-check"); return; }
+    if (preferences.celebrationSound) prepareCelebrationAudio();
     if (numberSpeechActiveRef.current) prepareSafariNumberAudio();
     setCelebrating(null);
     const previous = automaticityRef.current;
@@ -752,7 +784,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
     setSelectedFacts(current => ({ ...current, [next.session!.operation]: new Set(next.session!.factIds) }));
     persistAutomaticity(next);
     attemptsRef.current = sessionRecord(next)?.attempts ?? [];
-    setPhase("practice"); setView("practice"); setSessionNotice(""); setPendingWrong(null);
+    setPaused(false); retryRef.current = false; setPhase("practice"); setView("practice"); setSessionNotice(""); setPendingWrong(null);
     advance();
   };
 
@@ -767,18 +799,33 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
     }
   };
 
-  const continueAfterWrong = () => {
-    setPendingWrong(null);
-    advance();
-  };
-
   const allowPendingAnswer = () => {
-    if (!pendingWrong) return;
-    // A correction after the answer was supplied is not an unassisted first
-    // retrieval. Preserve the original recorded outcome and pending practice.
-    setResult({ text: "Correction noted; the first answer still needs practice.", tone: "slow" });
-    setPendingWrong(null);
-    nextRef.current = window.setTimeout(advance, 800);
+    const before = beforeAnswerRef.current;
+    if (!pendingWrong || !before?.session?.current) return;
+    if (nextRef.current !== null) window.clearTimeout(nextRef.current);
+    const next = applyAttemptResult(before, { presentationId: before.session.current.id, correct: false, responseMs: pendingWrong.responseMs, heard: pendingWrong.transcript, disputed: true });
+    statesRef.current = { ...statesRef.current, [pendingWrong.card.id]: pendingWrong.previousState };
+    const audit = next.events.at(-1)!;
+    attemptsRef.current = attemptsRef.current.map(a => a.id === audit.id ? { ...a, audit } : a);
+    persistAutomaticity(beginAnswerExposure(next, pendingWrong.card));
+    setResult({ text: "Recognition disputed · not a math mistake", tone: "slow" });
+    setPendingWrong(null); setListenState("No speed or mastery result");
+    nextRef.current = window.setTimeout(advance, 1400);
+  };
+  const pausePractice = () => {
+    if (nextRef.current !== null) window.clearTimeout(nextRef.current);
+    pausedFeedbackRef.current = answerHandledRef.current;
+    if (!answerHandledRef.current) { recordInvalidRef.current("Round paused; no answer scored."); retryRef.current = true; }
+    stopListening(); releaseSafariNumberAudio();
+    if (automaticityRef.current) persistAutomaticity(pauseAutomaticSession(automaticityRef.current));
+    setPaused(true);
+  };
+  const resumePractice = () => {
+    if (numberSpeechActiveRef.current) prepareSafariNumberAudio();
+    if (automaticityRef.current) persistAutomaticity(resumeAutomaticSession(automaticityRef.current));
+    setPaused(false);
+    if (pausedFeedbackRef.current) advance();
+    else if (current) startListening(current);
   };
 
   const exitPractice = () => {
@@ -790,146 +837,12 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
 
   const allCards = makeCards(operation);
   const selectedCount = allCards.filter((card) => selectedFacts[operation].has(card.id)).length;
-  const selectedCards = allCards.filter(card => selectedFacts[operation].has(card.id));
-  const summary = automaticity ? getProgressSummary(automaticity, selectedCards) : { total: selectedCards.length, assessed: 0, unassessed: selectedCards.length, training: 0, verifying: 0, verified: 0, due: 0, everVerified: 0, coldChecks: 0, coldCorrectPercent: null, coldAutomaticPercent: null, score: 0 };
+
   const subjectSummary = automaticity ? getProgressSummary(automaticity, allCards) : null;
   const currentSession = phase === "results" ? sessions[0] : null;
   const accountName = student?.name || account?.displayName || account?.email || localUserName;
 
-  if (view === "users" && isAdmin && cloudUser) {
-    return <AppFrame view={view} onNavigate={setView} onExit={() => setPhase("setup")} isAdmin accountName={accountName}>
-      <UserManagement currentUserId={cloudUser.id} />
-    </AppFrame>;
-  }
-
-  if (view === "students" && !student) {
-    return <AppFrame view={view} onNavigate={setView} onExit={() => setPhase("setup")} isAdmin={isAdmin} accountName={accountName}>
-      {cloudUser
-        ? <StudentManagement students={cloudStudents} activeStudentId={selectedStudentId} accountId={cloudUser.id} onSelectStudent={selectStudent} onChanged={loadStudents} />
-        : <LocalUserManagement
-            users={localUsers}
-            activeUserId={progressOwnerId}
-            onAddUser={onAddLocalUser ?? (() => undefined)}
-            onDeleteUser={onDeleteLocalUser ?? (() => undefined)}
-            onSelectUser={onSelectLocalUser ?? (() => undefined)}
-          />}
-    </AppFrame>;
-  }
-
-  if (view === "history") {
-    const historyStudent = localUsers.find((student) => student.id === historyLocalUserId);
-    const localHistory = cloudUser ? null : readProgress(historyLocalUserId);
-    const historySessions = cloudUser ? sessions : localHistory!.sessions;
-    const historyReady = !cloudUser || (progressReady && automaticity?.learnerId === selectedStudentId);
-    return <AppFrame view={view} onNavigate={setView} onExit={() => setView("practice")} isAdmin={isAdmin} accountName={accountName}>
-      <div className="topbar"><div><h1>History</h1><p className="muted">{cloudUser ? `Showing sessions, including early exits, for ${activeStudent?.name ?? "the selected student"}.` : `Showing sessions, including early exits, for ${historyStudent?.name ?? "this learner"} on this device.`}</p></div></div>
-      {!student && <div className="form-row">
-        <label>Student
-          {cloudUser
-            ? <select value={selectedStudentId} onChange={(event) => selectStudent(event.target.value)} disabled={studentsLoading || cloudStudents.length === 0}>
-                {cloudStudents.length === 0 && <option value="">No students yet</option>}
-                {cloudStudents.map((student) => <option key={student.id} value={student.id}>{student.name}{isAdmin && student.ownerEmail ? ` — ${student.ownerEmail}` : ""}</option>)}
-              </select>
-            : <select value={historyLocalUserId} onChange={(event) => setHistoryLocalUserId(event.target.value)}>
-                {localUsers.map((student) => <option key={student.id} value={student.id}>{student.name}</option>)}
-              </select>}
-        </label>
-      </div>}
-      {!historyReady ? <p className="notice" role="status">{syncMessage || (selectedStudentId ? "Loading this student’s history and progress…" : "Add a student to see their history and progress.")}</p> : <HistoryProgress key={cloudUser ? selectedStudentId : historyLocalUserId} name={cloudUser ? activeStudent?.name ?? "Student" : historyStudent?.name ?? "Learner"} sessions={historySessions} progress={cloudUser ? automaticity : localHistory?.automaticity}>
-      <SessionHistory sessions={historySessions} detailedDates onDelete={student ? undefined : async (sessionId) => {
-        const ownerId = cloudUser ? selectedStudentId : historyLocalUserId;
-        if (cloudUser) {
-          if (!navigator.onLine) throw new Error("Connect to the internet to delete a saved session.");
-          await queueProgressWrite(ownerId, async () => {
-            await accountRequest(`/api/sessions/${sessionId}`, { method: "DELETE" });
-            rememberUploadedSessions(ownerId, [sessionId]);
-          });
-        }
-        const saved = readProgress(ownerId);
-        saved.sessions = saved.sessions.filter((session) => session.id !== sessionId);
-        localStorage.setItem(progressStorageKey(ownerId), JSON.stringify(saved));
-        setSessions((current) => current.filter((session) => session.id !== sessionId));
-      }} />
-      </HistoryProgress>}
-    </AppFrame>;
-  }
-
-  if (phase === "practice" && current) {
-    return (
-      <main className="practice">
-        <header className="practice-toolbar">
-          <button className="button secondary exit-practice" onClick={exitPractice}>Exit practice</button>
-          <div className="progress">{progress} of {questionCount} completed</div>
-        </header>
-        <section className="practice-focus" aria-label="Current question">
-          <div className={`fact ${questionReady ? "" : "fact-preparing"}`}>{questionReady ? <>{current.a} {operationSymbol(current.operation)} {current.b}</> : "Get ready…"}</div>
-          <div className="practice-feedback" aria-live="polite" aria-atomic="true">
-            <div className={`result ${result?.tone ?? ""}`}>{result?.text ?? (questionReady ? "Say your answer aloud" : "Waiting for the microphone")}</div>
-            <div className="answer-reveal">{result?.correctAnswer !== undefined ? `Correct answer: ${result.correctAnswer}` : ""}</div>
-          </div>
-        </section>
-        <footer className="practice-controls">
-          <div className="speech-controls">
-            <button className={`mic ${listenState.startsWith("Listening") ? "listening" : ""}`} aria-label="Start listening" title="Start listening" onClick={restartRecognition} disabled={Boolean(result)}>Mic</button>
-            <div className="speech-status">
-              <div className="listen-state">{listenState || (result ? "Answer recorded" : "Getting ready…")}</div>
-              <div className="heard">{heard ? `Heard: ${heard}` : "Speak clearly into your microphone"}</div>
-            </div>
-          </div>
-          <div className="answer-actions">
-            {!result && questionReady && automaticity?.session?.current && <button className="button secondary" onClick={() => current && handleResponse(current, "I don't know", null, Math.min(TIMEOUT_MS, Math.max(0, Math.round(performance.now() - questionStartRef.current))))}>I don’t know</button>}
-            {pendingWrong && <>
-              {pendingWrong?.transcript && <>
-                <p className="accept-answer-prompt">Was this a recognition mistake? A correction will not count as an unassisted first answer.</p>
-                <button className="button secondary" onClick={allowPendingAnswer}>Acknowledge correction</button>
-              </>}
-              <button className="button primary" onClick={continueAfterWrong}>{pendingWrong?.transcript ? "No, next question" : "Next question"}</button>
-            </>}
-          </div>
-          {speechReport && !result && <details className="speech-test">
-            <summary>Recognition details for this attempt</summary>
-            <p>These details stay on this device. Copy them if your answer was not recognized.</p>
-            <textarea readOnly rows={7} aria-label="Practice speech recognition report" value={speechReport} />
-          </details>}
-        </footer>
-      </main>
-    );
-  }
-
-  if (cloudUser && studentsLoading) {
-    return <AppFrame view={view} onNavigate={setView} onExit={() => setPhase("setup")} isAdmin={isAdmin} accountName={accountName}><div className="setup"><p className="muted">Loading students…</p></div></AppFrame>;
-  }
-
-  if (cloudUser && !activeStudent) {
-    return <AppFrame view={view} onNavigate={setView} onExit={() => setPhase("setup")} isAdmin={isAdmin} accountName={accountName}><div className="setup"><h1>Add a student</h1><p className="muted">Create at least one student profile before starting practice.</p><button className="button primary" onClick={() => setView("students")}>Manage students</button></div></AppFrame>;
-  }
-
-  return <AppFrame view={view} onNavigate={setView} onExit={() => setPhase("setup")} isAdmin={isAdmin} accountName={accountName}>
-    {phase === "results" && currentSession ? (
-      <div className="setup">
-        {celebrating && <SessionCelebration choice={celebrating} onFinished={dismissCelebration} />}
-        <h1>Session complete</h1>
-        {sessionNotice && <p className="notice">{sessionNotice}</p>}
-        <p className="muted">A short, clean record of this practice round.</p>
-        <div className="stats">
-          <Stat label="Accuracy" value={`${Math.round((currentSession.attempts.filter((attempt) => attempt.answerCorrect).length / Math.max(currentSession.attempts.length, 1)) * 100)}%`} />
-          <Stat label="Questions" value={String(currentSession.attempts.length)} />
-          <Stat label="Average response time" value={currentSession.attempts.length ? `${(currentSession.attempts.reduce((sum, attempt) => sum + attempt.responseMs, 0) / currentSession.attempts.length / 1000).toFixed(2)}s` : "—"} />
-        </div>
-        <div className="form-row">
-          <button className="button primary" onClick={startPractice} disabled={!speechSupported || numberSpeechStatus === "loading" || selectedCount === 0 || !progressReady} title="Practice again with the same student, operation, selected facts, and question count">Repeat</button>
-          <button className="button secondary" onClick={() => setPhase("setup")}>New session</button>
-          <button className="button secondary" onClick={() => setView("history")}>View history</button>
-        </div>
-      </div>
-    ) : (
-      <div className="setup">
-        <header className="practice-heading">
-          <p className="eyebrow">A little practice, every day</p>
-          <h1>Let’s practice.</h1>
-          <p className="muted">Choose your facts, then speak each answer aloud. Build confidence one question at a time.</p>
-        </header>
-        {!speechSupported && <p className="notice">This app requires speech recognition. Use the latest Chrome or Edge on a laptop or desktop, then allow microphone access.</p>}
+  const microphoneSettings = (
         <section className="voice-settings" aria-labelledby="voice-settings-title">
           <div className="voice-settings-copy">
             <div className="voice-settings-heading"><h2 id="voice-settings-title">Voice recognition</h2><span className="voice-mode">{numberSpeechStatus === "loading" ? "Preparing number recognition…" : numberSpeechActive ? "Number recognition active" : localSpeechStatus === "ready" ? "On-device active" : speechSupported ? "Browser active" : "Recognition unavailable"}</span></div>
@@ -955,64 +868,177 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
           </div>
           {!student && numberSpeechStatus !== "loading" && <SpeechTest key={numberSpeechActive ? "numbers" : localSpeechStatus === "ready" ? "local" : "browser"} local={localSpeechStatus === "ready"} numbers={numberSpeechActive} />}
         </section>
-        {syncMessage && <p className="notice" role="status">{syncMessage}{!progressReady && <button className="button secondary" onClick={() => window.location.reload()}>Retry loading progress</button>}</p>}
-        <section className="session-settings" aria-labelledby="session-settings-title">
-        <h2 id="session-settings-title">Your practice session</h2>
-        {automaticity?.session && automaticity.session.status !== "ended" && <p className="notice">An unfinished {operationLabel(automaticity.session.operation).toLowerCase()} session has {automaticity.session.gradedCount} completed answers. Resume keeps its original facts and question count. <button className="button secondary" onClick={() => finishSession("Unfinished session saved. Choose New session to change its configuration.")}>End saved session</button></p>}
-        <div className="form-row">
-          {cloudUser && !student && <label>Student<select value={selectedStudentId} onChange={(event) => selectStudent(event.target.value)}>{cloudStudents.map((student) => <option key={student.id} value={student.id}>{student.name}{isAdmin && student.ownerEmail ? ` — ${student.ownerEmail}` : ""}</option>)}</select></label>}
-          <div className="operation-field"><span>Operation</span><div className="operation-toggle"><button aria-pressed={operation === "add"} onClick={() => setOperation("add")}>Addition</button><button aria-pressed={operation === "sub"} onClick={() => setOperation("sub")}>Subtraction</button><button aria-pressed={operation === "mul"} onClick={() => setOperation("mul")}>Multiplication</button></div></div>
-          <label>Questions<select value={questionCount} onChange={(event) => setQuestionCount(Number(event.target.value))}>{QUESTION_COUNT_OPTIONS.map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
-          <button className="button primary" onClick={startPractice} disabled={!speechSupported || numberSpeechStatus === "loading" || selectedCount === 0 || !progressReady}>{automaticity?.session && automaticity.session.status !== "ended" ? "Resume session" : "Start practice"}</button>
+  );
+  const frameProps = { view, onNavigate: setView, onExit: () => setPhase("setup" as Phase), isAdmin, accountName, avatarStudentId: student?.id ?? (!cloudUser ? progressOwnerId : undefined), onPreferences: () => setComfortOpen(true) };
+  const comfortDialog = comfortOpen && <PracticeDialog title="Make practice comfortable" onClose={() => setComfortOpen(false)}>
+    <p>Questions move on automatically. Pause whenever you need a break.</p>
+    {([["showTimes", "Show response times during practice"], ["successSound", "Short success sound"], ["motion", "Animated gumdrop celebrations"], ["celebrationSound", "Celebration music"]] as const).map(([key, label]) => <label className="check-row" key={key}><input type="checkbox" checked={preferences[key]} onChange={event => {
+      const next = { ...preferences, [key]: event.target.checked }; setPreferences(next); try { localStorage.setItem(PREFERENCES_KEY, JSON.stringify(next)); } catch { /* Current visit still works. */ }
+    }}/>{label}</label>)}
+    <p className="muted">Times remain available in History. Celebrations last eight seconds, with five tunes and five scenes mixed independently.</p>
+    <button className="button primary" onClick={() => setComfortOpen(false)}>Done</button>
+  </PracticeDialog>;
+  if (view === "microphone" && !student) return <AppFrame {...frameProps}>{comfortDialog}<MicrophoneCheck troubleshooting onBack={() => setView(isAdmin ? "users" : "students")}/>{microphoneSettings}{speechReport && <details className="speech-test"><summary>Last practice recognition report</summary><textarea readOnly rows={8} value={speechReport} aria-label="Last recognition report"/></details>}</AppFrame>;
+  if (phase === "mic-check") return <AppFrame {...frameProps}>{comfortDialog}<MicrophoneCheck onBack={() => setPhase("setup")} onContinue={() => { microphonePassedRef.current = true; startPractice(true); }}/></AppFrame>;
+
+  if (view === "users" && isAdmin && cloudUser) {
+    return <AppFrame {...frameProps}>{comfortDialog}
+      <div className="admin-mic-card"><h2>Microphone troubleshooting</h2><p>Run a sound check or inspect recognition settings on this browser.</p><button className="button secondary" onClick={() => setView("microphone")}>Check microphone</button></div><UserManagement currentUserId={cloudUser.id} />
+    </AppFrame>;
+  }
+
+  if (view === "students" && !student) {
+    return <AppFrame {...frameProps}>{comfortDialog}
+      <div className="admin-mic-card"><h2>Microphone troubleshooting</h2><p>A successful sound check is remembered for everyone on this browser.</p><button className="button secondary" onClick={() => setView("microphone")}>Check microphone</button></div>
+      {cloudUser
+        ? <StudentManagement students={cloudStudents} activeStudentId={selectedStudentId} accountId={cloudUser.id} onSelectStudent={selectStudent} onChanged={loadStudents} />
+        : <LocalUserManagement
+            users={localUsers}
+            activeUserId={progressOwnerId}
+            onAddUser={onAddLocalUser ?? (() => undefined)}
+            onDeleteUser={onDeleteLocalUser ?? (() => undefined)}
+            onSelectUser={onSelectLocalUser ?? (() => undefined)}
+          />}
+    </AppFrame>;
+  }
+
+  if (view === "history" || view === "progress") {
+    const historyStudent = localUsers.find((student) => student.id === historyLocalUserId);
+    const localHistory = cloudUser ? null : readProgress(historyLocalUserId);
+    const historySessions = cloudUser ? sessions : localHistory!.sessions;
+    const historyReady = !cloudUser || (progressReady && automaticity?.learnerId === selectedStudentId);
+    return <AppFrame {...frameProps}>{comfortDialog}
+      <div className="topbar"><div><h1>{view === "progress" ? "See your progress" : "Your practice history"}</h1><p className="muted">{cloudUser ? `Showing sessions, including early exits, for ${activeStudent?.name ?? "the selected student"}.` : `Showing sessions, including early exits, for ${historyStudent?.name ?? "this learner"} on this device.`}</p></div></div>
+      {!student && <div className="form-row">
+        <label>Student
+          {cloudUser
+            ? <select value={selectedStudentId} onChange={(event) => selectStudent(event.target.value)} disabled={studentsLoading || cloudStudents.length === 0}>
+                {cloudStudents.length === 0 && <option value="">No students yet</option>}
+                {cloudStudents.map((student) => <option key={student.id} value={student.id}>{student.name}{isAdmin && student.ownerEmail ? ` — ${student.ownerEmail}` : ""}</option>)}
+              </select>
+            : <select value={historyLocalUserId} onChange={(event) => setHistoryLocalUserId(event.target.value)}>
+                {localUsers.map((student) => <option key={student.id} value={student.id}>{student.name}</option>)}
+              </select>}
+        </label>
+      </div>}
+      {!historyReady ? <p className="notice" role="status">{syncMessage || (selectedStudentId ? "Loading this student’s history and progress…" : "Add a student to see their history and progress.")}</p> : <HistoryProgress initialTab={view === "progress" ? "report" : "sessions"} onPractice={!cloudUser && historyLocalUserId !== progressOwnerId ? undefined : card => { setOperation(card.operation); setSelectedFacts(current => ({ ...current, [card.operation]: new Set([card.id]) })); setPhase("setup"); setView("practice"); }} key={`${view}:${cloudUser ? selectedStudentId : historyLocalUserId}`} name={cloudUser ? activeStudent?.name ?? "Student" : historyStudent?.name ?? "Learner"} sessions={historySessions} progress={cloudUser ? automaticity : localHistory?.automaticity}>
+      <SessionHistory sessions={historySessions} detailedDates onDelete={student ? undefined : async (sessionId) => {
+        const ownerId = cloudUser ? selectedStudentId : historyLocalUserId;
+        if (cloudUser) {
+          if (!navigator.onLine) throw new Error("Connect to the internet to delete a saved session.");
+          await queueProgressWrite(ownerId, async () => {
+            await accountRequest(`/api/sessions/${sessionId}`, { method: "DELETE" });
+            rememberUploadedSessions(ownerId, [sessionId]);
+          });
+        }
+        const saved = readProgress(ownerId);
+        saved.sessions = saved.sessions.filter((session) => session.id !== sessionId);
+        localStorage.setItem(progressStorageKey(ownerId), JSON.stringify(saved));
+        setSessions((current) => current.filter((session) => session.id !== sessionId));
+      }} />
+      </HistoryProgress>}
+    </AppFrame>;
+  }
+
+  if (phase === "practice" && current) {
+    return <main className="practice redesign-practice">
+      <header className="practice-toolbar">
+        <div className="round-identity"><StudentAvatar studentId={progressOwnerId} name={activeStudent?.name ?? localUserName ?? "Student"}/><div><strong>{activeStudent?.name ?? localUserName ?? "Student"}</strong><small>{operationLabel(operation)}</small></div></div>
+        <div className="progress">{progress} of {questionCount} answered</div>
+        <div className="round-actions"><button className="button secondary" onClick={pausePractice}>Ⅱ Pause</button><button className="button danger end-round" onClick={exitPractice}>End round early</button></div>
+      </header>
+      <div className="round-track" role="progressbar" aria-label="Questions answered" aria-valuemin={0} aria-valuemax={questionCount} aria-valuenow={progress}><span style={{ width: `${Math.min(100, progress / questionCount * 100)}%` }}/></div>
+      <section className="practice-focus" aria-label="Current question">
+        <p className="eyebrow">{questionReady ? "Say just the answer" : "Wait for the microphone"}</p>
+        <div className={`fact ${questionReady ? "" : "fact-preparing"}`}>{questionReady ? <>{current.a} {operationSymbol(current.operation)} {current.b}</> : "Get ready…"}</div>
+        <div className="practice-feedback" aria-live="polite" aria-atomic="true">
+          <div className={`result ${result?.tone ?? ""}`}>{result?.text ?? (questionReady ? "Say your answer aloud" : "Opening the microphone…")}</div>
+          {result?.correctAnswer !== undefined && <div className="answer-reveal">{current.a} {operationSymbol(operation)} {current.b} = {result.correctAnswer}</div>}
+          {pendingWrong && <><p>Heard: <strong>{pendingWrong.transcript || "No answer"}</strong></p><button className="text-button" onClick={allowPendingAnswer}>That’s not what I said</button><small>Next question automatically in a moment.</small></>}
+          {!result && recognitionFailed && <div className="recovery-actions"><p className="muted">{listenState}</p><button className="button primary" onClick={restartRecognition}>Try microphone again</button><p className="fine-print">No answer was scored. An adult can troubleshoot in Family controls.</p></div>}
         </div>
-        <MasteryProgress score={subjectSummary?.score ?? 0} subject={operationLabel(operation)} studentName={activeStudent?.name ?? localUserName ?? "Local learner"} factCount={allCards.length} assessedCount={subjectSummary?.assessed ?? 0} />
-        </section>
-        {!student && <div className="automaticity-summary" aria-label="Automaticity progress">
-          <p><strong>{summary.unassessed}</strong> Not assessed · <strong>{summary.training}</strong> Building speed · <strong>{summary.verifying}</strong> Fast in practice; verifying · <strong>{summary.verified}</strong> Verified automatic</p>
-          <p><strong>{summary.due}</strong> checks due · Target: correct, unassisted, within 1.5 seconds on later unprimed checks.</p>
-          <p>Cold checks correct: <strong>{summary.coldCorrectPercent === null ? "No checks yet" : summary.coldCorrectPercent + "%"}</strong> · Correct and within target: <strong>{summary.coldAutomaticPercent === null ? "No checks yet" : summary.coldAutomaticPercent + "%"}</strong> ({summary.coldChecks} checks)</p>
-          {summary.everVerified > summary.verified && <p>Previously verified; needs recheck: {summary.everVerified - summary.verified} facts.</p>}
-          <details><summary>Individual fact status</summary><div className="fact-status-list">{selectedCards.map(card => { const fact = automaticity?.facts[card.id]; return <p key={card.id}><strong>{card.a} {operationSymbol(operation)} {card.b}</strong> — {fact?.everVerifiedAutomatic && fact.stage !== "MAINTENANCE" ? "Previously verified; needs recheck" : stageLabels[fact?.stage ?? "UNASSESSED"]}{fact?.dueAt ? ` · Check ${new Date(fact.dueAt).toLocaleString()}` : ""}</p>; })}</div></details>
-        </div>}
-        <FactGrid operation={operation} selected={selectedFacts[operation]} onChange={(next) => setSelectedFacts((current) => ({ ...current, [operation]: next }))} />
+      </section>
+      <footer className="practice-controls"><div className="speech-controls"><span className={`mic ${listenState.startsWith("Listening") ? "listening" : ""}`} aria-hidden="true">◉</span><div className="speech-status"><div className="listen-state">{result ? listenState || "Answer recorded" : listenState}</div><small>Voice practice · questions advance automatically</small></div></div><div className="heard">{heard ? `Heard: ${heard}` : "Say your answer when Listening appears."}</div></footer>
+      {paused && <PracticeDialog title="Your round is paused." onClose={resumePractice}><p>{progress} answers recorded. Nothing is timed while you take a break.</p><p className="muted">An unanswered question becomes retry practice, with no speed or mastery credit.</p><div className="form-row"><button className="button primary" onClick={resumePractice}>Resume practice</button><button className="button danger" onClick={exitPractice}>End &amp; save round</button></div></PracticeDialog>}
+    </main>;
+  }
+
+  if (cloudUser && studentsLoading) {
+    return <AppFrame {...frameProps}>{comfortDialog}<div className="setup"><p className="muted">Loading students…</p></div></AppFrame>;
+  }
+
+  if (cloudUser && !activeStudent) {
+    return <AppFrame {...frameProps}>{comfortDialog}<div className="setup"><h1>Add a student</h1><p className="muted">Create at least one student profile before starting practice.</p><button className="button primary" onClick={() => setView("students")}>Manage students</button></div></AppFrame>;
+  }
+
+  return <AppFrame {...frameProps}>{comfortDialog}
+    {phase === "results" && currentSession ? (
+      <div className="setup">
+        {celebrating && <SessionCelebration choice={celebrating} onFinished={dismissCelebration} sound={preferences.celebrationSound} motion={preferences.motion} />}
+        <p className="eyebrow">Practice counts</p><h1>Nice work showing up.</h1>
+        {sessionNotice && <p className="notice">{sessionNotice}</p>}
+        <p className="muted">Your round is saved. Every practice is a step forward.</p>
         <div className="stats">
-          <Stat label="Facts selected" value={`${selectedCount}/${allCards.length}`} />
-          <Stat label="Verified automatic" value={`${summary.verified}/${summary.total}`} />
-          <Stat label="Facts assessed" value={`${summary.assessed}/${summary.total}`} />
+          <Stat label="Correct answers" value={`${practiceMetrics(currentSession.attempts).correct} / ${practiceMetrics(currentSession.attempts).scored.length}`} />
+          <Stat label="Questions" value={String(currentSession.attempts.length)} />
+          <Stat label="Spoken response average" value={practiceMetrics(currentSession.attempts).averageMs === null ? "—" : `${(practiceMetrics(currentSession.attempts).averageMs! / 1000).toFixed(2)}s`} />
         </div>
+        <div className="form-row">
+          <button className="button primary" onClick={() => startPractice()} disabled={!speechSupported || numberSpeechStatus === "loading" || selectedCount === 0 || !progressReady} title="Practice again with the same student, operation, selected facts, and question count">Repeat this round →</button>
+          <button className="button secondary" onClick={() => setPhase("setup")}>Choose other facts</button>
+          <button className="button secondary" onClick={() => setView("history")}>View history</button>
+        </div><p className="fine-print">Retries, disputed recognition, and uncertain timing do not earn speed or mastery credit.</p><details className="result-detail-panel"><summary>See every answer</summary><SessionHistory sessions={[currentSession]} initiallyExpanded/></details>
+      </div>
+    ) : (
+      <div className="setup">
+        <header className="practice-heading">
+          <p className="eyebrow">A little practice, every day</p>
+          <h1>Ready for a quick round{activeStudent?.name || localUserName ? `, ${activeStudent?.name ?? localUserName}` : ""}?</h1>
+          <p className="muted">Choose your facts, then speak each answer aloud.</p>
+        </header>
+        {!speechSupported && <p className="notice">This app requires speech recognition. Use the latest Chrome or Edge on a laptop or desktop, then allow microphone access.</p>}
+
+        {syncMessage && <p className="notice" role="status">{syncMessage}{!progressReady && <button className="button secondary" onClick={() => window.location.reload()}>Retry loading progress</button>}</p>}
+        {cloudUser && !student && <label className="owner-student-select">Student<select value={selectedStudentId} onChange={event => selectStudent(event.target.value)}>{cloudStudents.map(value => <option key={value.id} value={value.id}>{value.name}{isAdmin && value.ownerEmail ? ` — ${value.ownerEmail}` : ""}</option>)}</select></label>}
+        <div className="operation-tabs" aria-label="Operation">{(["add", "sub", "mul"] as Operation[]).map(op => <button key={op} aria-pressed={operation === op} onClick={() => setOperation(op)}><span>{operationSymbol(op)}</span>{operationLabel(op)}</button>)}</div>
+        {automaticity?.session && automaticity.session.status !== "ended" && <p className="notice">An unfinished round has {automaticity.session.gradedCount} completed answers. Resume keeps its original facts and question count. <button className="button secondary" onClick={() => finishSession("Unfinished round saved.")}>End saved round</button></p>}
+        <section className="practice-builder">
+          <div className="round-plan"><p className="eyebrow">Your next round</p><h2>{operationLabel(operation)}</h2><p className="muted">Build quick recall.<br/>Choose any facts, any time.</p>
+            <label>Round length<select value={questionCount} onChange={event => setQuestionCount(Number(event.target.value))}>{QUESTION_COUNT_OPTIONS.map(count => <option key={count} value={count}>{count} questions</option>)}</select></label>
+            <div className="voice-plan"><strong>◉ Speak your answers</strong><p>Questions move on automatically.<br/>Goal: start your answer within 1.50s.</p></div>
+            <button className="button primary start-round" onClick={() => startPractice()} disabled={!speechSupported || numberSpeechStatus === "loading" || selectedCount === 0 || !progressReady}>{numberSpeechStatus === "loading" ? "Preparing voice…" : automaticity?.session && automaticity.session.status !== "ended" ? "Resume round" : "Start practice →"}</button>
+            <p className="fine-print">{selectedCount ? `${selectedCount} facts selected · practice as much as you like` : "Choose at least one fact to begin."}</p>
+            {numberSpeechStatus === "failed" && <p className="notice">Number recognition could not load. <button className="text-button" onClick={() => void enableNumberSpeech()}>Try again</button></p>}
+          </div>
+          <FactGrid operation={operation} selected={selectedFacts[operation]} onChange={next => setSelectedFacts(current => ({ ...current, [operation]: next }))}/>
+        </section>
+        <div className="subject-progress"><MasteryProgress score={subjectSummary?.score ?? 0} subject={operationLabel(operation)} studentName={activeStudent?.name ?? localUserName ?? "Student"} factCount={allCards.length} assessedCount={subjectSummary?.assessed ?? 0}/><button className="text-button" onClick={() => setView("progress")}>See my progress →</button></div>
+        <p className="fine-print">{subjectSummary?.verified ?? 0} of {allCards.length} facts mastered through later spaced checks. Progress covers every fact in {operationLabel(operation).toLowerCase()}.</p>
       </div>
     )}
   </AppFrame>;
 }
 
-function AppFrame({ children, view, onNavigate, onExit, isAdmin = false, accountName }: { children: React.ReactNode; view: View; onNavigate: (view: View) => void; onExit: () => void; isAdmin?: boolean; accountName?: string }) {
+function AppFrame({ children, view, onNavigate, onExit, isAdmin = false, accountName, avatarStudentId, onPreferences }: { children: React.ReactNode; view: View; onNavigate: (view: View) => void; onExit: () => void; isAdmin?: boolean; accountName?: string; avatarStudentId?: string; onPreferences?: () => void }) {
   const profileAccess = useContext(ProfileContext);
   async function signOut() {
     if (profileAccess.switchPerson) { profileAccess.switchPerson(); return; }
-    const supabase = supabaseBrowser();
-    if (!supabase) return;
-    await supabase.auth.signOut();
-    window.location.reload();
+    const supabase = supabaseBrowser(); if (!supabase) return;
+    await supabase.auth.signOut(); window.location.reload();
   }
-
-  return <div className="app-shell">
-    <aside className="sidebar">
-      <div className="sidebar-header">
-        <div className="brand">Math <span>Facts</span></div>
-        {accountName && <CurrentUser name={accountName} role={profileAccess.student ? "Student" : isAdmin ? "Admin" : profileAccess.switchPerson ? "Account owner" : "Current user"} />}
-      </div>
-      <div className="sidebar-navigation">
-        <nav className="nav">
-          <button aria-current={view === "practice" ? "page" : undefined} onClick={() => { onExit(); onNavigate("practice"); }}>Practice</button>
-          <button aria-current={view === "history" ? "page" : undefined} onClick={() => onNavigate("history")}>History</button>
-          {!profileAccess.student && <button aria-current={view === "students" ? "page" : undefined} onClick={() => onNavigate("students")}>Students</button>}
-          {isAdmin && <button aria-current={view === "users" ? "page" : undefined} onClick={() => onNavigate("users")}>Admin</button>}
-        </nav>
-        {hasSupabaseConfig() && <button className="button secondary switch-user" onClick={() => void signOut()}>{profileAccess.switchPerson ? "Switch User" : "Sign out"}</button>}
-      </div>
-      <div className="account">Voice-first practice<br />Addition, subtraction, and multiplication</div>
-    </aside>
-    <main className="main">{children}</main>
+  return <div className="app-shell redesign-shell">
+    <a className="skip-link" href="#workspace">Skip to main content</a>
+    <aside className="sidebar"><div className="sidebar-header"><div className="brand"><span className="brand-mark">÷</span><div>Auto<br/>Math Facts</div></div>
+      <div className="sidebar-person">{avatarStudentId && <StudentAvatar studentId={avatarStudentId} name={accountName ?? "Student"} editable/>}{accountName && <CurrentUser name={accountName} role={profileAccess.student ? "My workspace" : isAdmin ? "Admin" : "Account owner"}/>}</div></div>
+      <div className="sidebar-navigation"><nav className="nav" aria-label="Main navigation">
+        <button aria-current={view === "practice" ? "page" : undefined} onClick={() => { onExit(); onNavigate("practice"); }}>✦ Practice</button>
+        <button aria-current={view === "progress" ? "page" : undefined} onClick={() => onNavigate("progress")}>▥ My progress</button>
+        <button aria-current={view === "history" ? "page" : undefined} onClick={() => onNavigate("history")}>◷ History</button>
+        {!profileAccess.student && <button aria-current={view === "students" ? "page" : undefined} onClick={() => onNavigate("students")}>Family controls</button>}
+        {isAdmin && hasSupabaseConfig() && <button aria-current={view === "users" ? "page" : undefined} onClick={() => onNavigate("users")}>Admin</button>}
+      </nav>{profileAccess.switchPerson && <button className="text-button switch-user" onClick={() => void signOut()}>⇄ Switch User</button>}</div>
+      <div className="account"><button className="text-button" onClick={onPreferences}>⚙ Make it comfortable</button><p>Small steps.<br/>Stronger recall.</p></div>
+    </aside><main id="workspace" className="main">{children}</main>
   </div>;
 }
 
@@ -1037,7 +1063,7 @@ function FactGrid({ operation, selected, onChange }: { operation: Operation; sel
       ? "Subtraction: positive answers using 1 through 10"
       : "Multiplication: 2 through 12";
 
-  return <section className="fact-selector" aria-labelledby="fact-selector-title"><div className="fact-selector-heading"><div><h2 id="fact-selector-title">Choose facts</h2><p className="muted">{description}</p></div><div className="selection-actions"><button className="button secondary" onClick={() => onChange(new Set(allKeys))}>Select all</button><button className="button secondary" onClick={() => onChange(new Set())}>Clear all</button></div></div><div className="fact-grid-scroll"><div className="fact-grid" style={{ gridTemplateColumns: `64px repeat(${columns.length}, minmax(38px, 1fr))` }}><AxisToggle label="All" keys={allKeys} selected={selected} onToggle={toggleKeys} />{columns.map((column) => <AxisToggle key={`column-${column}`} label={String(column)} keys={rows.map((row) => keyFor(row, column)).filter((key) => validKeys.has(key))} selected={selected} onToggle={toggleKeys} />)}{rows.map((row) => <div className="fact-grid-row" key={`row-${row}`} style={{ gridColumn: `1 / span ${columns.length + 1}`, gridTemplateColumns: `64px repeat(${columns.length}, minmax(38px, 1fr))` }}><AxisToggle label={String(row)} keys={columns.map((column) => keyFor(row, column)).filter((key) => validKeys.has(key))} selected={selected} onToggle={toggleKeys} />{columns.map((column) => { const key = keyFor(row, column); return validKeys.has(key) ? <label className="fact-cell" key={key} title={`${column} ${operationWord(operation)} ${row}`}><input type="checkbox" checked={selected.has(key)} onChange={() => toggleKeys([key])} /><span className="sr-only">{column} {operationWord(operation)} {row}</span></label> : <span className="fact-cell unavailable" aria-hidden="true" key={key} />; })}</div>)}</div></div><p className="grid-help">Top numbers = first number. Left numbers = second number. Select a row or column to choose a group.</p></section>;
+  return <section className="fact-selector" aria-labelledby="fact-selector-title"><div className="fact-selector-heading"><div><h2 id="fact-selector-title">Choose facts</h2><p className="muted">{description}</p></div><div className="selection-actions"><button className="button secondary" onClick={() => onChange(new Set(allKeys))}>Select all</button><button className="button secondary" onClick={() => onChange(new Set())}>Clear all</button></div></div><div className="fact-grid-scroll"><div className="fact-grid" style={{ gridTemplateColumns: `38px repeat(${columns.length}, minmax(24px, 1fr))` }}><AxisToggle label="All" keys={allKeys} selected={selected} onToggle={toggleKeys} />{columns.map((column) => <AxisToggle key={`column-${column}`} label={String(column)} keys={rows.map((row) => keyFor(row, column)).filter((key) => validKeys.has(key))} selected={selected} onToggle={toggleKeys} />)}{rows.map((row) => <div className="fact-grid-row" key={`row-${row}`} style={{ gridColumn: `1 / span ${columns.length + 1}`, gridTemplateColumns: `38px repeat(${columns.length}, minmax(24px, 1fr))` }}><AxisToggle label={String(row)} keys={columns.map((column) => keyFor(row, column)).filter((key) => validKeys.has(key))} selected={selected} onToggle={toggleKeys} />{columns.map((column) => { const key = keyFor(row, column); return validKeys.has(key) ? <label className="fact-cell" key={key} title={`${column} ${operationWord(operation)} ${row}`}><input type="checkbox" checked={selected.has(key)} onChange={() => toggleKeys([key])} /><span className="sr-only">{column} {operationWord(operation)} {row}</span></label> : <span className="fact-cell unavailable" aria-hidden="true" key={key} />; })}</div>)}</div></div><p className="grid-help">Top numbers = first number. Left numbers = second number. Select a row or column to choose a group.</p></section>;
 }
 
 function AxisToggle({ label, keys, selected, onToggle }: { label: string; keys: string[]; selected: Set<string>; onToggle: (keys: string[]) => void }) {
@@ -1114,9 +1140,9 @@ function LocalUserManagement({ users, activeUserId, onAddUser, onDeleteUser, onS
   return <div className="users-view"><div className="topbar"><div><h1>Admin</h1><p className="muted">Add learners, switch the active learner, review performance, and remove local accounts.</p></div></div><section className="user-toolbar"><h2>Add user</h2><form className="form-row" onSubmit={addUser}><label>Name<input type="text" required maxLength={60} value={name} onChange={(event) => setName(event.target.value)} /></label><button className="button primary">Add user</button></form>{message && <p className="notice">{message}</p>}</section><section><h2>Users</h2><div className="table-scroll"><table className="history-table"><thead><tr><th>User</th><th>Added</th><th>Sessions</th><th>Last practice</th><th>Actions</th></tr></thead><tbody>{userRecords.map(({ user, progress }) => <tr key={user.id}><td><strong>{user.name}</strong>{user.id === activeUserId && <span className="role-label">Active</span>}</td><td>{user.createdAt ? new Date(user.createdAt).toLocaleDateString() : "Local profile"}</td><td>{progress.sessions.length}</td><td>{progress.sessions[0] ? new Date(progress.sessions[0].endedAt).toLocaleDateString() : "Never"}</td><td><div className="table-actions">{user.id !== activeUserId && <button className="button primary" onClick={() => onSelectUser(user.id)}>Use user</button>}<button className="button secondary" onClick={() => setSelectedUserId(user.id)}>View history</button>{pendingDeleteUserId === user.id ? <><button className="button secondary" onClick={() => setPendingDeleteUserId("")}>Cancel</button><button className="button danger" onClick={() => deleteUser(user)}>Confirm delete</button></> : <button className="button danger" disabled={users.length <= 1} onClick={() => setPendingDeleteUserId(user.id)}>Delete</button>}</div></td></tr>)}</tbody></table></div></section>{selectedRecord && <section className="user-history"><h2>{selectedRecord.user.name} history</h2><HistoryProgress key={selectedRecord.user.id} name={selectedRecord.user.name} sessions={selectedRecord.progress.sessions} progress={selectedRecord.progress.automaticity}><SessionHistory sessions={selectedRecord.progress.sessions} detailedDates /></HistoryProgress></section>}</div>;
 }
 
-function SessionHistory({ sessions, detailedDates = false, onDelete }: { sessions: SavedSession[]; detailedDates?: boolean; onDelete?: (id: string) => Promise<void> }) {
+function SessionHistory({ sessions, detailedDates = false, onDelete, initiallyExpanded = false }: { sessions: SavedSession[]; detailedDates?: boolean; onDelete?: (id: string) => Promise<void>; initiallyExpanded?: boolean }) {
   const [sessionSorts, setSessionSorts] = useState<Record<string, HistorySort>>({});
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(initiallyExpanded ? sessions[0]?.id ?? null : null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState("");
@@ -1134,8 +1160,8 @@ function SessionHistory({ sessions, detailedDates = false, onDelete }: { session
     <p className="muted">Select a session to see each question and response time.</p>
     {deleteError && <p className="notice" role="alert">{deleteError}</p>}
     <div className="table-scroll"><table className="history-table"><thead><tr><th>When</th><th>Operation</th><th>Questions</th><th>Accuracy</th><th>Average time</th><th>Details</th></tr></thead><tbody>{sessions.map((session) => {
-      const correct = session.attempts.filter((attempt) => attempt.answerCorrect).length;
-      const averageMs = session.attempts.length ? (session.attempts.reduce((sum, attempt) => sum + attempt.responseMs, 0) / session.attempts.length) : 0;
+      const metrics = practiceMetrics(session.attempts);
+      const correct = metrics.correct, averageMs = metrics.averageMs;
       const expanded = expandedId === session.id;
       const detailsId = `${historyId}-${session.id}`;
       const sort = sessionSorts[session.id] ?? "question";
@@ -1145,8 +1171,8 @@ function SessionHistory({ sessions, detailedDates = false, onDelete }: { session
       return <Fragment key={session.id}>
         <tr className={`session-row ${expanded ? "expanded" : ""}`} onClick={toggle}>
           <td>{date}</td><td>{operationLabel(session.operation)}</td><td>{session.attempts.length}</td>
-          <td>{session.attempts.length ? `${Math.round((correct / session.attempts.length) * 100)}%` : "-"}</td>
-          <td>{session.attempts.length ? `${(averageMs / 1000).toFixed(2)}s` : "-"}</td>
+          <td>{metrics.scored.length ? `${Math.round((correct / metrics.scored.length) * 100)}%` : "-"}</td>
+          <td>{averageMs !== null ? `${(averageMs / 1000).toFixed(2)}s` : "-"}</td>
           <td><div className="table-actions"><button className="button secondary" aria-expanded={expanded} aria-controls={detailsId} aria-label={`${expanded ? "Hide" : "View"} questions for ${operationLabel(session.operation)} on ${date}`} onClick={(event) => { event.stopPropagation(); toggle(); }}>{expanded ? "Hide questions" : "View questions"}</button>
             {onDelete && <button className="button danger" disabled={Boolean(deletingId)} aria-label={`Delete session from ${date}`} onClick={(event) => { event.stopPropagation(); setConfirmId(session.id); setDeleteError(""); }}>Delete</button>}
           </div></td>
@@ -1164,8 +1190,8 @@ function SessionHistory({ sessions, detailedDates = false, onDelete }: { session
           {session.attempts.length === 0 ? <p className="muted">No question results were recorded.</p> : <table className="history-table attempt-table">
             <thead><tr><th scope="col" aria-sort={sort === "question" ? "ascending" : "none"}><button className="history-sort" onClick={() => setSort("question")} aria-label="Sort by question order"># {sort === "question" ? "↑" : "↕"}</button></th><th scope="col">Question</th><th scope="col">Answer heard</th><th scope="col">Response time</th><th scope="col" aria-sort={sort === "result" ? "other" : "none"}><button className="history-sort" onClick={() => setSort("result")}>Result {sort === "result" ? "↓" : "↕"}</button></th></tr></thead>
             <tbody>{sortHistoryAttempts(session.attempts, sort).map(({ attempt, questionNumber }) => <tr key={attempt.id}>
-              <td>{questionNumber}</td><td>{attempt.fact}</td><td className="answer-heard">{attempt.heard?.trim() || "No answer recorded"}</td><td>{(attempt.responseMs / 1000).toFixed(2)}s</td>
-              <td><span className={`attempt-result ${historyResult(attempt)}`}>{historyResult(attempt) === "slow" ? "Slow (correct)" : attempt.answerCorrect ? "Correct" : "Wrong"}</span></td>
+              <td>{questionNumber}</td><td>{attempt.fact}</td><td className="answer-heard">{attempt.heard?.trim() || "No answer recorded"}</td><td>{hasComparableTime(attempt) ? `${(attempt.responseMs / 1000).toFixed(2)}s` : attempt.audit?.retry ? "Retry · untimed" : "—"}</td>
+              <td><span className={`attempt-result ${historyResult(attempt)}`}>{attempt.audit?.disputed ? "Recognition disputed" : !hasComparableTime(attempt) ? attempt.answerCorrect ? "Correct · unverified speed" : "Wrong" : historyResult(attempt) === "slow" ? "Slow (correct)" : attempt.answerCorrect ? "Correct" : "Wrong"}</span></td>
             </tr>)}</tbody>
           </table>}
         </section></td></tr>}

@@ -1,3 +1,4 @@
+import { hasComparableTime, isScoredAttempt } from "./practice-metrics";
 import { makeCards, type FactCard } from "./cards";
 import { AUTOMATICITY_CONFIG } from "./automaticity-config";
 import type { AutomaticProgress, AttemptEvent } from "./automaticity";
@@ -13,12 +14,12 @@ export const reportLabels = {
 export type ReportStatus = keyof typeof reportLabels;
 export const reportOperations: Record<Operation, string> = { add: "Addition", sub: "Subtraction", mul: "Multiplication" };
 export function factLabel(card: FactCard) { return `${card.a} ${card.operation === "add" ? "+" : card.operation === "sub" ? "−" : "×"} ${card.b}`; }
-const valid = (a: ReportAttempt) => Number.isFinite(a.responseMs) && a.responseMs >= 0 && a.audit?.result !== "INVALID" && a.audit?.result !== "ABANDONED";
+const valid = (a: ReportAttempt) => Number.isFinite(a.responseMs) && a.responseMs >= 0 && isScoredAttempt(a);
 const independentCorrect = (a: ReportAttempt) => a.answerCorrect && (!a.audit || (a.audit.firstAnswerCorrect && !a.audit.assisted));
 const average = (values: number[]) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
 function metrics(attempts: ReportAttempt[]) {
   const correct = attempts.filter(independentCorrect);
-  return { count: attempts.length, accuracy: attempts.length ? correct.length / attempts.length * 100 : null, averageMs: average(correct.map(a => a.responseMs)) };
+  return { count: attempts.length, accuracy: attempts.length ? correct.length / attempts.length * 100 : null, averageMs: average(correct.filter(hasComparableTime).map(a => a.responseMs)) };
 }
 function attemptFactId(a: ReportAttempt) {
   if (a.audit) return a.audit.factId;
@@ -45,7 +46,7 @@ export function buildProgressReport(operation: Operation, sessions: ReportSessio
     const recorded = (grouped.get(card.id) ?? []).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
     const state = progress?.facts[card.id];
     const latest = state?.latest;
-    const last = recorded.at(-1);
+    const last = recorded.filter(hasComparableTime).at(-1);
     const hasCurrent = latest && latest.result !== "INVALID" && latest.result !== "ABANDONED";
     const ms = hasCurrent ? latest.responseMs : last?.responseMs ?? null;
     const correct = hasCurrent ? latest.correct && latest.firstAnswerCorrect && !latest.assisted : last ? independentCorrect(last) : false;

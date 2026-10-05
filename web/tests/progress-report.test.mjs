@@ -9,7 +9,8 @@ import {renderToStaticMarkup} from 'react-dom/server';
 
 const cache = new Map();
 function load(relative) {
-  const file = path.resolve(import.meta.dirname, '..', relative);
+  let file = path.resolve(import.meta.dirname, '..', relative);
+  if (!fs.existsSync(file) && file.endsWith(".ts")) file += "x";
   if (cache.has(file)) return cache.get(file);
   const exports = {}; cache.set(file, exports);
   const source = ts.transpileModule(fs.readFileSync(file, 'utf8'), {fileName:file, compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;

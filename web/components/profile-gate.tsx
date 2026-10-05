@@ -2,6 +2,7 @@
 import {createContext,FormEvent,ReactNode,useEffect,useRef,useState} from "react";
 import {accessRequest,setAccessToken} from "../lib/access-client";
 import {flushProgressWrites} from "../lib/cloud-progress";
+import {StudentAvatar} from "./student-avatar";
 import {supabaseBrowser} from "../lib/supabase-browser";
 
 export type AccessProfile={id:string;email:string;displayName:string|null;role:"admin"|"user";status:"active"|"blocked"};
@@ -83,11 +84,11 @@ export function ProfileGate({children}:{children:(session:ProfileSession)=>React
     {message&&<p className="notice" role="alert">{message}</p>}{children(session)}
   </ProfileContext.Provider>;
   return <main className="identity-page"><div className="identity-panel">
-    <p className="eyebrow">Math Facts</p><h1>Who’s practicing?</h1>
+    <p className="eyebrow">Auto Math Facts</p><h1>Who’s practicing?</h1>
     <p className="muted">{profile?"Choose your name to get started.":"An account owner must sign in once to connect this device. Students can then choose their names without a password."}</p>
     {profile&&!ownerSelected?<>
       <button className="identity-card owner-card" disabled={busy} onClick={()=>{setOwnerSelected(true);setPassword("");setMessage("");}}><span className="identity-icon">🔒</span><span><strong>{profile.displayName||profile.email}</strong><small>Account owner · Password required</small></span></button>
-      <h2>Students</h2><div className="student-picker">{students.map(student=><button key={student.id} className="identity-card" disabled={busy} onClick={()=>void selectStudent(student.id)}><span className="identity-icon" aria-hidden="true">{student.name.slice(0,1).toUpperCase()}</span><span><strong>{student.name}</strong><small>Practice &amp; my history</small></span></button>)}</div>
+      <h2>Students</h2><div className="student-picker">{students.map(student=><button key={student.id} className="identity-card" disabled={busy} onClick={()=>void selectStudent(student.id)}><StudentAvatar studentId={student.id} name={student.name}/><span><strong>{student.name}</strong><small>Let’s practice →</small></span></button>)}</div>
       {!students.length&&<p className="empty">No students yet. Choose the account owner to add your first student.</p>}
       <button className="button secondary" disabled={busy} onClick={()=>void forget()}>Use a different account / forget this device</button>
     </>:<>

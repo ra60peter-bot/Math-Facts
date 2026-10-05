@@ -43,6 +43,7 @@ function harness() {
     recordPresentationRef: { current() {} }, recordInvalidRef: { current() {} },
     localSpeechReadyRef: { current: false }, setLocalSpeechStatus() {},
     numberSpeechActiveRef: { current: false },
+    preferences: {showTimes:true}, retryRef: {current:false}, setRecognitionFailed() {},
     setSpeechSupported() {}, setQuestionReady(value) { questionReady.push(value); }, setHeard() {}, setResult(value) { feedback.push(value); },
     answerFor: () => 28,
     setListenState: value => statuses.push(value),
@@ -126,13 +127,14 @@ test("number engine flushes timing at deadline even with an interim number", () 
   assert.equal(h.answers[0][3],3100);
 });
 
-test("missing or zero word timing keeps the answer with an explicitly estimated nonzero duration", () => {
+test("missing or zero word timing keeps the answer but excludes estimated duration from scoring", () => {
   for (const onset of [undefined,1000,1005]) {
     const h = harness(); h.recognition.usesWordTiming = true;
     h.clock(1000); h.startAudio(); h.clock(2000);
     h.recognition.onresult({results:[{0:{transcript:"two"},length:1,isFinal:true}],speechStartedAt:onset});
     assert.equal(h.answers.length,1);assert.equal(h.answers[0][3],1000);
-    assert.match(h.statuses.at(-1), /response time estimated/);
+    assert.match(h.statuses.at(-1), /timing unavailable/);
+    assert.equal(h.answers[0][4], false);
   }
 });
 
@@ -251,8 +253,8 @@ test("live numeric feedback appears immediately without prematurely saving a par
   h.result("twenty");
   assert.equal(h.feedback.at(-1),null);
   assert.equal(h.answers.length, 0);
-  h.clock(800); h.result("twenty eight");
-  assert.equal(h.feedback.at(-1).text, "Correct! 0.8 seconds");
+  h.clock(800); h.recognition.onspeechstart(); h.result("twenty eight");
+  assert.equal(h.feedback.at(-1).text, "Correct! · 0.80 seconds");
   assert.equal(h.answers.length, 0);
   h.clock(1800); h.result("twenty eight", true);
   assert.equal(h.answers.length, 1);
@@ -489,6 +491,9 @@ test("a correction after feedback preserves the first answer and cannot award au
   const before = { totalAttempts: 2 };
   let reviewed, retryGrade, feedback, next;
   const context = {
+    beforeAnswerRef:{current:{session:{current:{id:"wrong"}}}},
+    applyAttemptResult: (before, input) => ({events:[{id:"wrong",disputed:input.disputed}]}),
+    beginAnswerExposure: p=>p, persistAutomaticity() {}, setListenState() {},
     pendingWrong: { card: { id: "mul-5-10" }, transcript: "51", responseMs: 900, attemptId: "wrong", previousState: before },
     normalizeSpokenPhrase: parser.exports.normalizeSpokenPhrase,
     gradeResponse: () => "easy",
@@ -505,6 +510,7 @@ test("a correction after feedback preserves the first answer and cannot award au
   assert.equal(context.attemptsRef.current[0].answerCorrect, false);
   assert.equal(context.attemptsRef.current[1].answerCorrect, false);
   assert.equal(context.attemptsRef.current[1].heard, "51");
+  assert.equal(context.attemptsRef.current[1].audit.disputed, true);
   assert.equal(retryGrade, undefined); assert.equal(feedback.tone, "slow");
   assert.equal(next, context.advance);
 });
@@ -533,12 +539,13 @@ test("practice feedback uses the inclusive 1.5-second cutoff and correct colors"
   }).outputText;
   for (const [parsed, elapsed, label, tone] of [
     [8, 1499, "Correct!", "good"], [8, 1500, "Correct!", "good"],
-    [8, 1501, "Correct; needs speed practice", "slow"], [7, 700, "Incorrect", "wrong"],
-    [null, 4000, "Incorrect", "wrong"],
+    [8, 1501, "Slow!", "slow"], [7, 700, "Wrong!", "wrong"],
+    [null, 4000, "Wrong!", "wrong"],
   ]) {
     let feedback;
     const context = {
       useCallback: fn => fn, answerHandledRef: { current: false },
+      preferences: {showTimes:true,successSound:false}, retryRef:{current:false}, beforeAnswerRef:{current:null},
       AUTOMATICITY_CONFIG: {automaticityTargetMs:1500},
       automaticityRef: {current:{session:{current:{id:"presentation",fact:{id:"test"}}}}},
       applyAttemptResult: () => ({events:[{id:"presentation",completedAt:1000}],session:{gradedCount:1}}),
