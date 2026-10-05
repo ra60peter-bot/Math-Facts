@@ -79,7 +79,7 @@ export function classifyResult(input: { correct: boolean; responseMs: number; as
   return input.responseMs <= C.verySlowThresholdMs ? "SLOW_CORRECT" : "VERY_SLOW_CORRECT";
 }
 export function startAutomaticSession(progress: AutomaticProgress, options: { id: string; cards: FactCard[]; operation: Operation; targetCount: number }, clock: Clock = Date.now, random = Math.random) {
-  // A caller must explicitly end the prior session to reset its caps/streaks.
+  // Resume unfinished work without resetting its count or warm streaks.
   if (progress.session && progress.session.status !== "ended") return resumeAutomaticSession(progress, clock);
   const next = copy(progress, clock());
   const ids = options.cards.map(card => card.id);
@@ -113,7 +113,8 @@ export function selectNextQuestion(progress: AutomaticProgress, enabled: FactCar
   if (session.current) return { kind: "none", reason: "Finish or skip the current question first.", nextUsefulAt: null };
   if (session.gradedCount >= session.targetCount) return { kind: "none", reason: "Your selected practice size is complete.", nextUsefulAt: null };
   const cards = enabled.filter(card => session.factIds.includes(card.id));
-  const available = cards.filter(card => !session.finished.includes(card.id) && (session.counts[card.id] ?? 0) < C.maxGradedAttemptsPerFactPerSession);
+  // Spacing guides the preferred queue; it never prevents optional practice.
+  const available = cards.filter(card => !session.finished.includes(card.id));
   const last = progress.exposures.filter(e => e.kind === "prompt").at(-1);
   // A fresh later visit is not adjacent to yesterday's last question.
   const adjacent = last && now - last.at < C.minimumColdGapMs ? last : null;
@@ -146,21 +147,19 @@ export function selectNextQuestion(progress: AutomaticProgress, enabled: FactCar
   const preferred = C.allocation[session.allocationPosition % C.allocation.length];
   const chosen = preferred === "TRAINING" ? training[0] ?? check : check ?? training[0];
   if (chosen) return { kind: "question", fact: chosen, attemptKind: checks.includes(chosen) ? "check" : assessments.includes(chosen) ? "assessment" : "training" };
-  const times = cards.flatMap(card => {
-    const fact = progress.facts[card.id];
-    if (!fact?.dueAt) return [];
-    const latest = Math.max(0, ...progress.exposures.filter(e => e.factId === card.id).map(e => e.at));
-    return [Math.max(fact.dueAt, latest + C.minimumColdGapMs)];
-  }).filter(at => at > now);
-  for (const card of waiting.filter(card => active.includes(card.id) && guards(card))) {
-    const retry = progress.facts[card.id].pendingRetry;
-    if (retry && retry.anchorAt + retry.minimumElapsedMs > now && retryEligible(progress, card, retry.anchorAt + retry.minimumElapsedMs)) times.push(retry.anchorAt + retry.minimumElapsedMs);
-  }
-  return { kind: "none", reason: "No eligible questions right now. Remaining facts need more spacing, a later unprimed check, or have reached this session’s limit. This does not mean everything is mastered.", nextUsefulAt: times.length ? Math.min(...times) : null };
+  // Keep every selected fact available, even immediately after a correct answer,
+  // before a retry is due, or after mastery. Rotate when possible, but a one-fact
+  // selection can repeat for the entire set. Extra attempts never earn cold credit.
+  const alternatives = cards.filter(guards);
+  const practice = alternatives.length ? alternatives : cards;
+  practice.sort((a, b) => (session.counts[a.id] ?? 0) - (session.counts[b.id] ?? 0)
+    || trainingAge(a) - trainingAge(b) || (tie.get(a.id)! - tie.get(b.id)!));
+  if (practice[0]) return { kind: "question", fact: practice[0], attemptKind: "extra" };
+  return { kind: "none", reason: "Choose at least one fact to practice.", nextUsefulAt: null };
 }
 export function presentQuestion(progress: AutomaticProgress, selection: Extract<Selection, { kind: "question" }>, clock: Clock = Date.now) {
   const session = progress.session;
-  if (!session || session.status === "ended" || session.current || !session.factIds.includes(selection.fact.id) || (session.counts[selection.fact.id] ?? 0) >= C.maxGradedAttemptsPerFactPerSession) return progress;
+  if (!session || session.status === "ended" || session.current || session.gradedCount >= session.targetCount || !session.factIds.includes(selection.fact.id)) return progress;
   const now = clock(), next = copy(progress, now), s = next.session!;
   // Preserve UUID compatibility with the existing attempts table. Derive a
   // stable per-presentation UUID from the random session UUID and its counter.
@@ -171,7 +170,7 @@ export function presentQuestion(progress: AutomaticProgress, selection: Extract<
   s.current = { id, fact: selection.fact, kind: selection.attemptKind, presentedAt: now, coldEligible: selection.attemptKind === "check" && coldEligible(progress, selection.fact, now) };
   s.presentedCount++; s.allocationPosition++; s.status = "active";
   const fact = next.facts[selection.fact.id];
-  s.active = s.active.filter(key => next.facts[key].stage === "TRAINING" && !s.finished.includes(key) && (s.counts[key] ?? 0) < C.maxGradedAttemptsPerFactPerSession);
+  s.active = s.active.filter(key => next.facts[key].stage === "TRAINING" && !s.finished.includes(key));
   if (selection.attemptKind === "training" && !s.active.includes(fact.id) && s.active.length < C.activeTrainingPromptLimit) s.active.push(fact.id);
   next.exposures.push({ factId: fact.id, familyId: fact.familyId, answer: answer(selection.fact), at: now, date: practiceDate(now, next.timeZone), kind: "prompt", presentationId: id });
   return next;
@@ -186,11 +185,11 @@ export function applyAttemptResult(progress: AutomaticProgress, input: AttemptIn
   const event: AttemptEvent = { id: presentation.id, learnerId: next.learnerId, sessionId: s.id, factId: fact.id, familyId: fact.familyId, answer: answer(presentation.fact), presentedAt: presentation.presentedAt, completedAt: now, responseMs: Number.isFinite(input.responseMs) ? Math.max(0, input.responseMs) : 0, correct: input.correct, firstAnswerCorrect: input.firstAnswerCorrect ?? input.correct, assisted: Boolean(input.assisted), kind: presentation.kind, coldEligible: presentation.coldEligible, qualifiedCold: presentation.coldEligible && !input.assisted && !invalid && !input.abandoned, result, heard: input.heard ?? "" };
   next.events.push(event); s.current = null;
   if (result === "INVALID" || result === "ABANDONED") return next;
-  if ((s.counts[fact.id] ?? 0) >= C.maxGradedAttemptsPerFactPerSession) return progress;
   s.counts[fact.id] = (s.counts[fact.id] ?? 0) + 1; s.gradedCount++;
   next.completions.push({ factId: fact.id, familyId: fact.familyId, answer: event.answer, at: now });
   fact.latest = event;
   if (result !== "FAST_CORRECT") {
+    s.finished = s.finished.filter(id => id !== fact.id);
     fact.stage = "TRAINING"; fact.trainingSince ??= now;
     fact.coldStreak = 0; fact.coldDates = []; fact.firstColdAt = null; fact.intervalLevel = 0;
     fact.dueAt = now + C.crossDayIntervalsDays[0] * DAY; s.fastStreaks[fact.id] = 0;
@@ -215,7 +214,7 @@ export function applyAttemptResult(progress: AutomaticProgress, input: AttemptIn
       fact.stage = "VERIFYING"; fact.intervalLevel = 0; fact.pendingRetry = null; fact.trainingSince = null; s.finished.push(fact.id);
     } else fact.pendingRetry = { ...C.firstFastTrainingSuccessRetry, anchorAt: now, afterCompletion: next.completions.length };
   }
-  if (s.finished.includes(fact.id) || s.counts[fact.id] >= C.maxGradedAttemptsPerFactPerSession) s.active = s.active.filter(id => id !== fact.id);
+  if (s.finished.includes(fact.id)) s.active = s.active.filter(id => id !== fact.id);
   return next;
 }
 export function beginAnswerExposure(progress: AutomaticProgress, card: FactCard, clock: Clock = Date.now) {

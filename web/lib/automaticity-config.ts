@@ -4,7 +4,6 @@ export const AUTOMATICITY_CONFIG = {
   verySlowThresholdMs: 3000,
   attemptWindowMs: 4000, // Preserve the existing speech attempt window.
   activeTrainingPromptLimit: 10,
-  maxGradedAttemptsPerFactPerSession: 5,
   wrongRetry: { minimumUnrelatedQuestions: 3, minimumElapsedMs: 15000 },
   verySlowCorrectRetry: { minimumUnrelatedQuestions: 4, minimumElapsedMs: 20000 },
   slowCorrectRetry: { minimumUnrelatedQuestions: 8, minimumElapsedMs: 30000 },

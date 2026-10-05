@@ -92,12 +92,12 @@ test("0.7 and 1.3 seconds earn identical scheduling, with no speed bonus", () =>
   assert.equal(h1.p.facts[c.id].stage,h2.p.facts[c.id].stage);
 });
 
-test("first fast assessment is not verification and does not drill again today", () => {
+test("first fast assessment leaves optional practice available without awarding verification", () => {
   const c = card("mul-3-2"), h = harness([c]); assess(h,c);
   const f = h.p.facts[c.id];
   assert.equal(f.stage,"VERIFYING"); assert.equal(f.coldStreak,0); assert.equal(f.pendingRetry,null);
-  assert.equal(f.everVerifiedAutomatic,false); assert.equal(h.select().kind,"none");
-  h.end(); h.start(); assert.equal(h.select().kind,"none");
+  assert.equal(f.everVerifiedAutomatic,false); assert.equal(h.select().attemptKind,"extra");
+  h.end(); h.start(); assert.equal(h.select().attemptKind,"extra");
 });
 
 test("coverage visits every unassessed fact across ordinary short sessions", () => {
@@ -105,8 +105,8 @@ test("coverage visits every unassessed fact across ordinary short sessions", () 
   for (let session=0; session<13; session++) {
     h.end(); h.start(10);
     for (let q=0; q<10; q++) {
-      const next=h.select(); if(next.kind === "none") break;
-      assert.equal(next.attemptKind,"assessment"); assert.equal(seen.has(next.fact.id),false);
+      const next=h.select(); assert.equal(next.kind,"question");
+      if (seen.size < cards.length) assert.equal(seen.has(next.fact.id),false);
       seen.add(next.fact.id); h.attempt(next.fact,1000,true,next.attemptKind);
     }
   }
@@ -172,11 +172,19 @@ test("slow or wrong resets the per-fact training streak and new sessions reset w
   }
 });
 
-test("all graded kinds count toward the five-attempt cap; invalid attempts do not", () => {
-  const c=card("mul-3-2"),h=harness();
-  for(let i=0;i<5;i++) { h.show(c, i===0?"assessment":"training"); h.result(false,100); }
-  assert.equal(h.p.session.counts[c.id],5); assert.equal(h.p.facts[c.id].stage,"TRAINING");
-  assert.equal(h.select([c]).kind,"none"); assert.equal(h.show(c),undefined);
+test("one chosen fact fills 100 questions with any outcome and can immediately repeat", () => {
+  for (const [correct,ms] of [[false,1000],[true,2500],[true,1000]]) {
+    const c=card("mul-3-2"),h=harness([c]); h.end();h.start(100);
+    for(let i=0;i<100;i++) {
+      const next=h.select();assert.equal(next.kind,"question");assert.equal(next.fact.id,c.id);
+      h.attempt(next.fact,ms,correct,next.attemptKind);
+      assert.equal(h.p.session.gradedCount,i+1);
+    }
+    assert.equal(h.p.session.counts[c.id],100);assert.equal(h.p.events.length,100);
+    assert.equal(h.p.facts[c.id].coldStreak,0);assert.notEqual(h.p.facts[c.id].stage,"MAINTENANCE");
+    assert.equal(h.select().kind,"none");assert.equal(h.show(c),undefined);
+    h.end();h.start(10);assert.equal(h.select().kind,"question");
+  }
 });
 
 test("technical invalidity and abandoned prompts preserve exposure without changing achievement", () => {
@@ -228,7 +236,7 @@ test("current presentation cannot invalidate its own precomputed cold eligibilit
   assert.equal(h.p.facts[c.id].coldStreak,1);assert.equal(h.p.events.at(-1).qualifiedCold,true);
 });
 
-test("resume retains exposure/caps and cannot turn the abandoned question into a cold success", () => {
+test("resume retains exposure/counts and cannot turn the abandoned question into a cold success", () => {
   const c=card("mul-3-2"),h=harness();assess(h,c,2300);h.fill(c,8,30000);h.show(c);
   const count=h.p.session.counts[c.id], retry=JSON.stringify(h.p.facts[c.id].pendingRetry);
   h.p=A.resumeAutomaticSession(JSON.parse(JSON.stringify(h.p)),()=>h.now);
@@ -307,7 +315,7 @@ test("due check and reverse training can both be selected independently", () => 
   assert.equal(h.select().attemptKind,"check");
 });
 
-test("active pool respects ten-fact limit and waiting training survives caps and later sessions", () => {
+test("preferred active pool holds ten facts and waiting training survives later sessions", () => {
   const h=harness();const targets=makeCards("mul").filter(c=>c.a<c.b).slice(0,12);
   for(let i=0;i<targets.length;i++){const f=h.p.facts[targets[i].id];f.stage="TRAINING";f.trainingSince=BASE+i;}
   for(let i=0;i<10;i++) {const next=h.select(targets);assert.equal(next.kind,"question");h.attempt(next.fact,1000,true,next.attemptKind);}
@@ -316,12 +324,12 @@ test("active pool respects ten-fact limit and waiting training survives caps and
   h.end();h.start();const next=h.select(targets);assert.ok(untouched.some(c=>c.id===next.fact.id));
 });
 
-test("identical adjacency is forbidden while the reverse is an independent option", () => {
+test("prefer alternatives including reversals but allow immediate single-fact repetition", () => {
   const c=card("mul-3-2"),reverse=card("mul-2-3"),same=card("add-3-3"),other=card("add-2-3");
   const h=harness([c,reverse,same,other]);assess(h,c,2300);
   assert.ok([other.id,reverse.id].includes(h.select().fact.id));
   assert.equal(h.select([c,reverse]).fact.id,reverse.id);
-  assert.equal(h.select([c]).kind,"none");
+  assert.equal(h.select([c]).fact.id,c.id);assert.equal(h.select([c]).attemptKind,"extra");
 });
 
 test("9 × 7 masters on its own even when 7 × 9 is wrong before every check", () => {
@@ -361,17 +369,58 @@ test("addition reversals are independent and existing own exposures still enforc
   assert.ok(h.p.session.active.includes(c.id));assert.ok(h.p.session.active.includes(reverse.id));
 });
 
-test("tiny/all-blocked decks finish explicitly and never fill with future verified facts", () => {
+test("tiny decks continue while retry gaps are pending", () => {
   const c=card("mul-3-2"),h=harness([c]);assess(h,c,2300);h.tick(60000);
-  const none=h.select();assert.equal(none.kind,"none");assert.match(none.reason,/spacing/);
-  assert.equal(none.nextUsefulAt,h.p.facts[c.id].dueAt);
+  const next=h.select();assert.equal(next.kind,"question");assert.equal(next.fact.id,c.id);
+  assert.equal(next.attemptKind,"extra");assert.equal(A.retryEligible(h.p,c,h.now),false);
   assert.equal(h.p.facts[c.id].stage,"TRAINING");
+});
+
+test("future mastered facts rotate freely, stay selected, and earn no early cold credit", () => {
+  const cards=[card("mul-7-8"),card("mul-8-7"),card("mul-9-9")],h=harness(cards);
+  for (const c of cards) {
+    const fact=h.p.facts[c.id];fact.stage="MAINTENANCE";fact.dueAt=BASE+30*DAY;
+    fact.coldStreak=4;fact.everVerifiedAutomatic=true;
+  }
+  let last=null;
+  for (let i=0;i<30;i++) {
+    const next=h.select(deck);assert.equal(next.kind,"question");
+    assert.ok(cards.some(c=>c.id===next.fact.id));assert.notEqual(next.fact.id,last);
+    assert.equal(next.attemptKind,"extra");last=next.fact.id;
+    assert.equal(h.attempt(next.fact,1000,true,next.attemptKind).qualifiedCold,false);
+  }
+  for (const c of cards) {
+    assert.equal(h.p.session.counts[c.id],10);assert.equal(h.p.facts[c.id].coldStreak,4);
+    assert.equal(h.p.facts[c.id].stage,"MAINTENANCE");assert.equal(h.p.facts[c.id].dueAt,BASE+30*DAY);
+  }
+});
+
+test("old saved sessions at the former cap resume and record more attempts", () => {
+  const c=card("mul-3-2"),h=harness([c]);assess(h,c);
+  h.p.session.counts[c.id]=5;h.p.session.gradedCount=5;
+  h.p=A.resumeAutomaticSession(JSON.parse(JSON.stringify(h.p)),()=>h.now);
+  const next=h.select();assert.equal(next.kind,"question");
+  h.attempt(next.fact,1200,true,next.attemptKind);
+  assert.equal(h.p.session.counts[c.id],6);assert.equal(h.p.session.gradedCount,6);
+});
+
+test("wrong or slow extra practice returns a finished fact to the preferred training queue", () => {
+  for (const [correct,ms,questions,elapsed] of [[false,1000,3,15000],[true,2500,8,30000]]) {
+    const c=card("mul-3-2"),h=harness();assess(h,c);
+    assert.ok(h.p.session.finished.includes(c.id));
+    h.attempt(c,ms,correct,"extra");
+    assert.equal(h.p.session.finished.includes(c.id),false);
+    h.fill(c,questions,elapsed);
+    const next=h.select([c]);assert.equal(next.fact.id,c.id);assert.equal(next.attemptKind,"training");
+  }
 });
 
 test("filtered-out records persist but no unselected/disabled facts are injected", () => {
   const allowed=card("add-8-9"),outside=card("mul-3-2"),h=harness([allowed]);
   h.p.facts[outside.id].stage="MAINTENANCE";h.p.facts[outside.id].dueAt=0;
   assert.equal(h.select(deck).fact.id,allowed.id);assert.equal(h.p.facts[outside.id].stage,"MAINTENANCE");
+  assess(h,allowed);assert.equal(h.select(deck).fact.id,allowed.id);
+  assert.equal(h.select([]).kind,"none");
 });
 
 test("duplicate and stale result IDs never grade again or grade the next presentation", () => {
@@ -413,12 +462,12 @@ test("correction exposure still open at reload conservatively starts spacing at 
   assert.equal(A.retryEligible(h.p,c,h.now),false);assert.equal(h.p.facts[c.id].latest.correct,false);
 });
 
-test("same-answer adjacency relaxes for training only and never bypasses a hard gap", () => {
+test("same-answer training follows spacing preferences then offers extra practice", () => {
   const target=card("mul-3-2"),same=card("add-3-3"),h=harness();
   assess(h,target,100,false);h.fill(target,3,15000);assess(h,same);
   assert.equal(h.select([target]).fact.id,target.id);
   h.p.facts[target.id].pendingRetry.minimumUnrelatedQuestions=99;
-  assert.equal(h.select([target]).kind,"none");
+  assert.equal(h.select([target]).fact.id,target.id);assert.equal(h.select([target]).attemptKind,"extra");
 });
 
 test("assistance and corrected first answers reset verification without creating cold success", () => {

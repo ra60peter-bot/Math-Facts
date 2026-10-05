@@ -1,6 +1,14 @@
 # Math Facts: desktop handoff
 
-Updated September 29, 2026. Read this before continuing work.
+Updated October 5, 2026. Read this before continuing work.
+
+### Unrestricted selected-fact practice and report row sizing
+
+All selected facts stay available for as much practice as the learner wants. Removed the five-attempt cap from selection/presentation/grading. Adaptive training, assessment, and due checks still get preference; when spacing or finished facts empty those queues, extra practice fills the chosen set, rotating among selected facts when possible. Even one fact can fill 100 questions and be repeated immediately in a new set. Extra attempts update history/latest progress but never earn cold-check credit. Wrong/slow extra answers restore preferred training eligibility. Existing capped sessions resume without a migration; mastery requirements, operation ranges, recognition, and timing are unchanged. This supersedes older hard-limit/early-finish descriptions below.
+
+The Progress report's Needs practice badge accidentally inherited the fullscreen `.practice` layout. Report badges now use scoped `data-status` styling so all table rows stay compact without changing the actual practice screen.
+
+Validation: 149 tests pass, ESLint passes, and the production build (including TypeScript) succeeds. Regressions cover 100 repetitions with fast/slow/wrong results, immediate Repeat, future mastered facts, resumed formerly capped sessions, and wrong extra answers restoring training priority. Browser visual QA was unavailable because CUA exposed no browser surfaces; the report render tests pass and the CSS collision is removed. Temporary preview files/server were cleaned up.
 
 ### Independent reversed facts
 

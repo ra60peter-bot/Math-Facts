@@ -1,6 +1,6 @@
 ## Progress display update
 
-The 0–1,000 bar now reflects each fact's latest scored first answer across the entire current operation, independently of verification: wrong/assisted/unassessed = 0; correct = 500 + 500 × min(1, 1500 / responseMs). The bar averages these credits across ALL facts for that operation (81 addition, 45 subtraction, 121 multiplication), independently of the practice selection, and reaches 1,000 only when every fact is correct within 1.5 seconds. Unassessed facts are explicitly labeled; they are not recorded as wrong. Invalid attempts preserve prior evidence. Verified counts and every scheduling rule below remain unchanged. This supersedes the original verified-count-only display.
+The 0–1,000 bar now reflects each fact's latest scored first answer across the entire current operation, independently of verification: wrong/assisted/unassessed = 0; correct = 500 + 500 × min(1, 1500 / responseMs). The bar averages these credits across ALL facts for that operation (81 addition, 45 subtraction, 121 multiplication), independently of the practice selection, and reaches 1,000 only when every fact is correct within 1.5 seconds. Unassessed facts are explicitly labeled; they are not recorded as wrong. Invalid attempts preserve prior evidence. Verified counts remain separate from the display score. This supersedes the original verified-count-only display.
 
 # Adaptive automaticity scheduler
 
@@ -17,19 +17,30 @@ success probability.
 - First substantive, unassisted correct answer at **≤1,500 ms** passes. Exactly
   1,500 passes; 1,501 does not. Faster passing answers earn identical schedules.
 - Existing answer window remains **4,000 ms**, separate from the speed target.
-- Active training pool: at most 10 ordered prompts; reversed facts can both be active.
-- At most 5 graded attempts of a fact per session, including assessments/checks.
-- Wrong/assisted: 3 unrelated completions **and** 15 seconds before a retry.
-- Very slow correct (>3,000 ms): 4 completions **and** 20 seconds.
-- Slow correct (1,501–3,000 ms): 8 completions **and** 30 seconds.
-- First fast training success: 12 completions **and** 60 seconds. The second
-  consecutive fast success of that fact ends its training for that session.
+- Preferred training pool: at most 10 ordered prompts; reversed facts can both be active.
+- No per-fact attempt limit. Every selected fact is always available for extra practice,
+  including mastered facts and facts whose next check is in the future.
+- Wrong/assisted: prefer 3 unrelated completions **and** 15 seconds before a retry.
+- Very slow correct (>3,000 ms): prefer 4 completions **and** 20 seconds.
+- Slow correct (1,501–3,000 ms): prefer 8 completions **and** 30 seconds.
+- First fast training success: prefer 12 completions **and** 60 seconds. The second
+  consecutive fast success moves it out of preferred training into verification;
+  extra practice remains available.
 - Cross-day checks use intervals of 1, 2, 4, 7, 14, then 30 days, anchored to actual
   completion timestamps. Late visits advance only one step.
 - Four consecutive successful cold checks, on four distinct local dates and
   spanning at least seven actual days, establish current verified automaticity.
 - Queue allocation repeats T,T,C,T,T,C,T,T,T,C, falling back when one queue has
   no eligible questions. Due checks precede unassessed facts in CHECK.
+
+If neither preferred queue can supply a question, extra practice fills the remaining
+set from the selected facts. It favors less-practiced facts and avoids consecutive
+identical questions when alternatives exist. A one-fact selection can repeat for the
+whole set. Spacing and active-pool rules guide priority, never block practice or end
+a set early. Extra attempts are recorded normally and update the latest-performance
+score; wrong/slow answers return the fact to training. They cannot award cold-check
+credit or advance the verification ladder. Users may immediately Repeat a completed
+set as often as they want; the selected question count still defines each session.
 
 Cold eligibility is captured before presentation. It requires a due check, no
 exposure to that exact ordered fact for at least 24 actual hours, no exposure to it on the current
@@ -51,10 +62,10 @@ successes. A later slow/wrong/assisted answer returns the fact to TRAINING, rese
 the current verification streak and preserves `everVerifiedAutomatic`. Reverification
 requires a fresh qualifying streak. Overdue alone is not failure.
 
-The purple/gold 0–1,000 bar is now the share of selected facts currently verified,
-not a score based on average speed or warm repetitions. Stage counts, assessed
-coverage, due checks, cold correctness and cold within-target correctness accompany
-it. Per-fact status shows pending checks and previously verified facts needing recheck.
+The purple/gold 0–1,000 bar uses whole-operation latest-performance credit as described
+above. Stage counts, assessed coverage, due checks, cold correctness and cold
+within-target correctness remain separate. Per-fact status shows pending checks
+and previously verified facts needing recheck.
 Session accuracy/average time remain useful history, but do not award verification.
 
 ## Storage, migration and session semantics
@@ -84,13 +95,14 @@ Other same-answer prompts still follow the existing anti-priming rules. Subtract
 remains ordered. Excluding facts does not delete their state. Historical family IDs
 remain audit metadata; eligibility reads factId, so old snapshots need no migration.
 
-Reload resumes the original session/configuration with its caps, warm streaks,
+Reload resumes the original session/configuration with its counts, warm streaks,
 allocation position and pending retries. An interrupted prompt becomes ungraded
 ABANDONED exposure; a technical retry cannot manufacture another cold check.
 Open corrective feedback is conservatively treated as exposed until resume/end.
 Exit ends and records the session, including early exits; Repeat explicitly starts
-a new session with retained settings. Insufficient spacing or a tiny deck can end
-a session early with a reason and next useful time; this is not a mastery claim.
+a new session with retained settings. Small decks and spacing constraints never
+force an early finish. Existing saved sessions at the former five-attempt cap can
+continue without a migration or reset.
 
 Presentation IDs remain UUID-compatible with the existing attempts table. Duplicate
 and stale result IDs do not grade again. Recognition callbacks still use the existing
@@ -116,7 +128,7 @@ npm run build
 
 The suite includes a fake-clock Day 0 (3800→2300→1400→1200) and Day 1/3/7/14
 verification sequence followed by a maintenance speed lapse, all boundaries,
-operation identity/ranges, coverage, retry gaps, priming, DST, caps, assisted answers,
+operation identity/ranges, coverage, retry preferences, priming, DST, unrestricted practice, assisted answers,
 reload/resume, stale/duplicate IDs, UUIDs, cloud snapshot/audit round-trip and existing
 speech regressions. A temporary local browser fixture exercised the actual practice
 component with simulated transcripts: ten fast assessments, Repeat, wrong feedback,
@@ -140,5 +152,3 @@ and both JSONB columns verified before release.
 - A captured silent window is indistinguishable from a microphone that supplies
   silence without reporting a device error. Reported technical failures remain
   ungraded; the scheduler does not redesign audio diagnostics.
-- The “next useful review” is the earliest time known from current spacing/due
-  constraints. New exposures and still-needed unrelated questions can defer it.
