@@ -1,0 +1,21 @@
+Generated with the built-in image_gen tool. Five review concepts, not deployed.
+
+Shared prompt:
+Create ONE polished, professional logo concept for a voice-based math practice app for ages 10–14 called "Auto Math Facts". This is a brand identity proposal, not a webpage. Wide landscape presentation 3:2 ratio. Deep dark teal solid background #19292b. A single horizontal lockup centrally placed, generous negative space. Icon on left, exact highly legible wordmark "Auto Math Facts" on right, two lines with Auto smaller above Math Facts. Crisp bespoke modern rounded sans typography, warm off-white text, beautiful optical kerning. Flat vector-like design, few colors, scalable silhouette; no photorealism, no mockup objects, no shadows, no gradients, no extra slogans. Must feel delightful and credible for middle-school students, not preschool. Do not use a division sign in a rounded square.
+
+01-spark.png
+Direction 1: "Spark". A memorable asymmetrical four-point mint green spark with a tiny warm amber satellite dot, cleverly incorporating two short negative-space horizontal strokes suggesting an equals sign. Restrained, confident, exceptionally clean. The symbol should communicate the instant of understanding, not AI branding. Add a small discreet upper-left presentation label "01 / SPARK" in muted mint, separate from logo.
+
+02-gumdrop.png
+Direction 2: "Gumdrop". A unique friendly mint gumdrop mascot silhouette: flattened base, softly domed top, small dark eyes and slight confident smile. A tiny lilac four-point sparkle at its upper-right. Minimal, witty and iconic, no arms or feet, no childish bubble lettering. Typographic wordmark should feel sophisticated yet approachable. Add small discreet upper-left presentation label "02 / GUMDROP", separate from logo.
+
+03-quick-recall.png
+Direction 3: "Quick Recall". Two beautifully offset rounded flashcards, one mint and one warm golden yellow, with a striking dark lightning-bolt cutout on the front card. Dynamic but disciplined silhouette, communicates recall and learning. Strong geometric wordmark, warm ivory with Auto in muted mint. Add small discreet upper-left presentation label "03 / QUICK RECALL", separate from logo.
+
+04-monogram.png
+Direction 4: "Monogram". Design a truly custom compact interlocking "AM" monogram from continuous rounded mint strokes, with A and M both readable in one balanced geometric symbol. Small warm-white negative spaces, no enclosed square or badge. Refined, energetic, distinctive, grown-up educational technology identity. Editorial rounded wordmark. Add small discreet upper-left presentation label "04 / MONOGRAM", separate from logo.
+
+05-math-tiles.png
+Direction 5: "Math Tiles". Three small rounded geometric tiles arranged in a compact triangular cluster: mint plus tile at upper left, soft periwinkle multiplication tile at upper right, warm coral minus tile centered beneath. Clear dark operator signs, consistent weights, lively minimal composition. Refined heavy rounded wordmark, warm off-white. Add small discreet upper-left presentation label "05 / MATH TILES", separate from logo.
+
+Review note: generated previews added a glow despite the flat-design prompt. For the chosen production logo, use crisp unglowing artwork at sidebar size.

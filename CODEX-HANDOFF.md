@@ -2,6 +2,10 @@
 
 Updated October 5, 2026. Read this before continuing work.
 
+### Spark logo selected (October 5)
+
+User chose logo concept 1 (Spark). The reusable BrandLogo component uses a crisp SVG mint spark with equals-sign cutouts and a gold dot, with an Auto / Math Facts wordmark. It replaces the division tile in the sidebar and the text-only brand on both profile pickers. app/icon.svg provides the matching browser icon. Light mode uses darker green/amber for contrast; dark mode matches the selected concept. Generated concept previews and original prompts are retained under design-review/logo-concepts. Visual checks cover both themes; lint and production build passed. Speech and practice behavior are unchanged.
+
 ### Compact owner microphone help (October 5)
 
 Removed microphone troubleshooting from Admin. Adult account owners access a small Microphone help link below student management in Family controls; student profiles cannot access the link or troubleshooting view. The manual check is compact, and advanced recognition settings/diagnostics start collapsed. The remembered first-use sound check and speech engine are unchanged. Verified layout in the isolated replay, 11 access-control regressions, lint and production build.

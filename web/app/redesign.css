@@ -14,7 +14,16 @@ button:focus-visible, summary:focus-visible, a:focus-visible { outline:3px solid
 .redesign-shell { grid-template-columns:220px minmax(0,1fr); }
 .redesign-shell .sidebar { padding:32px 20px; gap:30px; }
 .redesign-shell .brand { display:flex; align-items:center; gap:12px; font-size:21px; line-height:1.15; letter-spacing:-.035em; }
-.brand-mark { display:grid; place-items:center; width:39px; height:39px; background:var(--blue); color:var(--primary-ink)!important; border-radius:12px; font-size:28px; }
+.spark-brand,.redesign-shell .spark-brand { display:flex; align-items:center; gap:10px; }
+.spark-brand-mark { width:43px; height:49px; flex-shrink:0; color:#217757; }
+.spark-brand-dot { fill:#b86e08; }
+.spark-brand-type { display:flex; flex-direction:column; font-family:ui-rounded,"Arial Rounded MT Bold","Trebuchet MS",sans-serif; font-weight:800; }
+.spark-brand .spark-brand-auto { color:var(--ink); font-size:16px; line-height:1.15; letter-spacing:-.3px; }
+.spark-brand .spark-brand-name { color:var(--ink); font-size:21px; line-height:1.2; letter-spacing:-.8px; white-space:nowrap; }
+:root[data-theme="dark"] .spark-brand-mark { color:#91e0b5; }
+:root[data-theme="dark"] .spark-brand-dot { fill:#ffd078; }
+:root[data-theme="dark"] .spark-brand .spark-brand-auto,:root[data-theme="dark"] .spark-brand .spark-brand-name { color:#fff8e9; }
+.identity-brand { margin-bottom:32px; }
 .sidebar-person { display:flex; align-items:center; gap:10px; }
 .redesign-shell .current-user { border:0; background:none; padding:0; min-width:0; }
 .current-user-details strong { font-size:17px; }

@@ -16,6 +16,7 @@ import { accessRequest } from "../lib/access-client";
 import { SpeechTest } from "./speech-test";
 import { MasteryProgress } from "./mastery-progress";
 import { MicrophoneCheck } from "./microphone-check";
+import { BrandLogo } from "./brand-logo";
 import { StudentAvatar } from "./student-avatar";
 import { PracticeDialog } from "./practice-dialog";
 import { defaultPreferences, readPreferences, PREFERENCES_KEY, microphoneConfirmed } from "../lib/practice-preferences";
@@ -166,7 +167,7 @@ function LocalMode() {
   };
 
   const activeUser = users.find((user) => user.id === activeUserId) ?? users[0];
-  if (choosing) return <main className="identity-page"><div className="identity-panel"><p className="eyebrow">Auto Math Facts</p><h1>Who’s practicing?</h1><p className="muted">Choose your name. A little practice goes a long way.</p><div className="student-picker">{users.map(user => <button className="identity-card" key={user.id} onClick={() => selectUser(user.id)}><StudentAvatar studentId={user.id} name={user.name}/><strong>{user.name}</strong><small>Let’s practice →</small></button>)}</div><p className="fine-print">Local profiles · saved on this computer</p></div></main>;
+  if (choosing) return <main className="identity-page"><div className="identity-panel"><BrandLogo className="identity-brand"/><h1>Who’s practicing?</h1><p className="muted">Choose your name. A little practice goes a long way.</p><div className="student-picker">{users.map(user => <button className="identity-card" key={user.id} onClick={() => selectUser(user.id)}><StudentAvatar studentId={user.id} name={user.name}/><strong>{user.name}</strong><small>Let’s practice →</small></button>)}</div><p className="fine-print">Local profiles · saved on this computer</p></div></main>;
   return <ProfileContext.Provider value={{student:false,switchPerson:()=>setChoosing(true)}}><PracticeApp
     key={activeUser.id}
     cloudUser={null}
@@ -1031,7 +1032,7 @@ function AppFrame({ children, view, onNavigate, onExit, isAdmin = false, account
   }
   return <div className="app-shell redesign-shell">
     <a className="skip-link" href="#workspace">Skip to main content</a>
-    <aside className="sidebar"><div className="sidebar-header"><div className="brand"><span className="brand-mark">÷</span><div>Auto<br/>Math Facts</div></div>
+    <aside className="sidebar"><div className="sidebar-header"><BrandLogo/>
       <div className="sidebar-person">{avatarStudentId && <StudentAvatar studentId={avatarStudentId} name={accountName ?? "Student"} editable/>}{accountName && <CurrentUser name={accountName} role={profileAccess.student ? "My workspace" : isAdmin ? "Admin" : "Account owner"}/>}</div></div>
       <div className="sidebar-navigation"><nav className="nav" aria-label="Main navigation">
         <button aria-current={view === "practice" ? "page" : undefined} onClick={() => { onExit(); onNavigate("practice"); }}>✦ Practice</button>

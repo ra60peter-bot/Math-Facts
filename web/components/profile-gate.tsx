@@ -3,6 +3,7 @@ import {createContext,FormEvent,ReactNode,useEffect,useRef,useState} from "react
 import {accessRequest,setAccessToken} from "../lib/access-client";
 import {flushProgressWrites} from "../lib/cloud-progress";
 import {StudentAvatar} from "./student-avatar";
+import {BrandLogo} from "./brand-logo";
 import {supabaseBrowser} from "../lib/supabase-browser";
 
 export type AccessProfile={id:string;email:string;displayName:string|null;role:"admin"|"user";status:"active"|"blocked"};
@@ -84,7 +85,7 @@ export function ProfileGate({children}:{children:(session:ProfileSession)=>React
     {message&&<p className="notice" role="alert">{message}</p>}{children(session)}
   </ProfileContext.Provider>;
   return <main className="identity-page"><div className="identity-panel">
-    <p className="eyebrow">Auto Math Facts</p><h1>Who’s practicing?</h1>
+    <BrandLogo className="identity-brand"/><h1>Who’s practicing?</h1>
     <p className="muted">{profile?"Choose your name to get started.":"An account owner must sign in once to connect this device. Students can then choose their names without a password."}</p>
     {profile&&!ownerSelected?<>
       <button className="identity-card owner-card" disabled={busy} onClick={()=>{setOwnerSelected(true);setPassword("");setMessage("");}}><span className="identity-icon">🔒</span><span><strong>{profile.displayName||profile.email}</strong><small>Account owner · Password required</small></span></button>
