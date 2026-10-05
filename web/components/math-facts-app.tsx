@@ -880,18 +880,17 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
     <p className="muted">Times remain available in History. Celebrations last eight seconds, with five tunes and five scenes mixed independently.</p>
     <button className="button primary" onClick={() => setComfortOpen(false)}>Done</button>
   </PracticeDialog>;
-  if (view === "microphone" && !student) return <AppFrame {...frameProps}>{comfortDialog}<MicrophoneCheck troubleshooting onBack={() => setView(isAdmin ? "users" : "students")}/>{microphoneSettings}{speechReport && <details className="speech-test"><summary>Last practice recognition report</summary><textarea readOnly rows={8} value={speechReport} aria-label="Last recognition report"/></details>}</AppFrame>;
+  if (view === "microphone" && !student) return <AppFrame {...frameProps}>{comfortDialog}<MicrophoneCheck troubleshooting onBack={() => setView("students")}/><details className="microphone-advanced"><summary>Recognition settings and diagnostics</summary>{microphoneSettings}{speechReport && <details className="speech-test"><summary>Last practice recognition report</summary><textarea readOnly rows={8} value={speechReport} aria-label="Last recognition report"/></details>}</details></AppFrame>;
   if (phase === "mic-check") return <AppFrame {...frameProps}>{comfortDialog}<MicrophoneCheck onBack={() => setPhase("setup")} onContinue={() => { microphonePassedRef.current = true; startPractice(true); }}/></AppFrame>;
 
   if (view === "users" && isAdmin && cloudUser) {
     return <AppFrame {...frameProps}>{comfortDialog}
-      <div className="admin-mic-card"><h2>Microphone troubleshooting</h2><p>Run a sound check or inspect recognition settings on this browser.</p><button className="button secondary" onClick={() => setView("microphone")}>Check microphone</button></div><UserManagement currentUserId={cloudUser.id} />
+      <UserManagement currentUserId={cloudUser.id} />
     </AppFrame>;
   }
 
   if (view === "students" && !student) {
     return <AppFrame {...frameProps}>{comfortDialog}
-      <div className="admin-mic-card"><h2>Microphone troubleshooting</h2><p>A successful sound check is remembered for everyone on this browser.</p><button className="button secondary" onClick={() => setView("microphone")}>Check microphone</button></div>
       {cloudUser
         ? <StudentManagement students={cloudStudents} activeStudentId={selectedStudentId} accountId={cloudUser.id} onSelectStudent={selectStudent} onChanged={loadStudents} />
         : <LocalUserManagement
@@ -901,6 +900,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
             onDeleteUser={onDeleteLocalUser ?? (() => undefined)}
             onSelectUser={onSelectLocalUser ?? (() => undefined)}
           />}
+      <div className="owner-microphone-help"><button className="text-button" onClick={() => setView("microphone")}>Microphone help</button><span>Sound check and recognition settings</span></div>
     </AppFrame>;
   }
 

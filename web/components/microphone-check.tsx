@@ -25,12 +25,12 @@ export function MicrophoneCheck({ troubleshooting = false, onContinue, onBack }:
     } catch { if (version === generation.current) { setState("failed"); setMessage("Number recognition could not load. Check your connection and try again."); releaseVoiceAudio(); } }
   }
   const busy = ["loading", "listening", "processing"].includes(state);
-  return <section className="mic-check-panel">
+  return <section className={`mic-check-panel${troubleshooting ? " mic-check-compact" : ""}`}>
     <button className="text-button" onClick={onBack}>← {troubleshooting ? "Back to controls" : "Back to my choices"}</button>
     <p className="eyebrow">{troubleshooting ? "Microphone troubleshooting" : "One-time sound check"}</p>
-    <div className={`mic-orb ${state === "ready" ? "ready" : ""}`} aria-hidden="true">{state === "ready" ? "✓" : "◉"}</div>
+    {!troubleshooting && <div className={`mic-orb ${state === "ready" ? "ready" : ""}`} aria-hidden="true">{state === "ready" ? "✓" : "◉"}</div>}
     <h1>{state === "ready" ? "You’re ready to practice." : state === "listening" ? "Say a number, such as eight." : state === "loading" ? "Preparing your microphone…" : state === "processing" ? "Checking what we heard…" : "Let’s make sure we can hear you."}</h1>
-    <p className="muted">One successful check is remembered for every student in this browser on this computer. You can run it again from Family controls or Admin.</p>
+    <p className="muted">{troubleshooting ? "Check this browser’s microphone without recording a practice result." : "One successful check is remembered for every student in this browser on this computer. An account owner can run it again from Family controls."}</p>
     <div aria-live="polite">{heard && <p>Heard: <strong>{heard}</strong></p>}{message && <p className="notice">{message}</p>}</div>
     {state === "ready" && !troubleshooting ? <button className="button primary" onClick={onContinue}>Start my round →</button> : <button className="button primary" disabled={busy} onClick={() => void check()}>{busy ? "Listening…" : troubleshooting ? "Run microphone check" : "Try the microphone"}</button>}
     <p className="fine-print">Allow microphone access if asked. Say one number in your usual voice. This check does not record a practice result.</p>

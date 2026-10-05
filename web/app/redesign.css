@@ -64,9 +64,10 @@ button:focus-visible, summary:focus-visible, a:focus-visible { outline:3px solid
 .mastery-progress-caption { max-width:55ch; }
 .subject-progress>.text-button { font-size:13px; white-space:nowrap; }
 .owner-student-select { max-width:440px; }
-.admin-mic-card { padding:20px 24px; margin-bottom:26px; border:1px solid var(--line); border-radius:14px; background:var(--surface); }
-.admin-mic-card h2 { margin-bottom:8px; }
-.admin-mic-card p { color:var(--muted); font-size:14px; }
+.owner-microphone-help { display:flex; align-items:center; flex-wrap:wrap; gap:4px 14px; margin-top:28px; padding-top:12px; border-top:1px solid var(--line); font-size:13px; }
+.owner-microphone-help span { color:var(--muted); }
+.microphone-advanced { max-width:640px; margin-top:16px; font-size:14px; }
+.microphone-advanced>summary { cursor:pointer; padding:12px 0; color:var(--blue); }
 .stats { gap:18px; margin:26px 0; }
 .stat { border-radius:15px; padding:26px; background:var(--surface); }
 .stat strong { font-size:clamp(30px,3.2vw,46px); color:var(--blue); }
@@ -84,6 +85,12 @@ button:focus-visible, summary:focus-visible, a:focus-visible { outline:3px solid
 .mic-check-panel h1 { font-size:32px; }
 .mic-check-panel>.muted { max-width:56ch; margin:0 auto 24px; }
 .mic-check-panel>.fine-print { margin:20px auto 0; max-width:58ch; }
+.mic-check-panel.mic-check-compact { max-width:640px; margin:0; padding:20px; border-radius:12px; text-align:left; }
+.mic-check-compact h1 { font-size:22px; letter-spacing:-.02em; }
+.mic-check-compact>.text-button { margin-bottom:12px; font-size:13px; }
+.mic-check-compact>.muted { margin:0 0 16px; font-size:14px; }
+.mic-check-compact>.fine-print { margin:12px 0 0; }
+.mic-check-compact>.button { min-height:40px; padding:9px 14px; font-size:14px; }
 .mic-orb { display:grid; place-items:center; width:84px; height:84px; border:1px solid var(--blue); border-radius:50%; color:var(--blue); background:var(--selected); margin:25px auto; font-size:36px; }
 .practice-dialog { width:min(550px,calc(100vw - 36px)); padding:32px; border:1px solid var(--line); border-radius:20px; background:var(--surface); color:var(--ink); box-shadow:0 20px 80px #0007; max-height:85dvh; overflow:auto; }
 .practice-dialog::backdrop { background:#061312b8; backdrop-filter:blur(5px); }

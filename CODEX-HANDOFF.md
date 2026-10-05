@@ -2,6 +2,12 @@
 
 Updated October 5, 2026. Read this before continuing work.
 
+### Compact owner microphone help (October 5)
+
+Removed microphone troubleshooting from Admin. Adult account owners access a small Microphone help link below student management in Family controls; student profiles cannot access the link or troubleshooting view. The manual check is compact, and advanced recognition settings/diagnostics start collapsed. The remembered first-use sound check and speech engine are unchanged. Verified layout in the isolated replay, 11 access-control regressions, lint and production build.
+
+The approved redesign and correct-only automatic advancement were deployed to production at `aad80ba`; Vercel reported Ready and assigned `math-facts-swart.vercel.app`. The rollback tag is preserved locally (remote tag upload hit connectivity errors); old commit `b92fcb3` also remains on GitHub.
+
 ### Correct-only automatic advance (October 5)
 
 Latest user correction: only correct answers (including correct-but-slow) advance automatically. Wrong answers and four-second no-answer results stay visible with a Next question button; the last question offers See results. Disputing recognition also stays on screen. Pause/Resume preserves this review state. Correct-answer delays remain 1.2s fast / 1.8s slow. Speech engine/capture/parser/timing are unchanged. This supersedes earlier all-answer auto-advance descriptions.
