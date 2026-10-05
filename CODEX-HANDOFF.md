@@ -2,6 +2,12 @@
 
 Updated October 5, 2026. Read this before continuing work.
 
+### Correct-only automatic advance (October 5)
+
+Latest user correction: only correct answers (including correct-but-slow) advance automatically. Wrong answers and four-second no-answer results stay visible with a Next question button; the last question offers See results. Disputing recognition also stays on screen. Pause/Resume preserves this review state. Correct-answer delays remain 1.2s fast / 1.8s slow. Speech engine/capture/parser/timing are unchanged. This supersedes earlier all-answer auto-advance descriptions.
+
+Local preview authentication needs outbound access to Supabase: run the preview server with permitted network access. A restricted server returns the generic “Sign in to connect this device” after a successful Google redirect. Existing keys and localhost redirect configuration were verified; restarting the server with network access allowed the administrator to sign in.
+
 ### Approved redesign implemented (October 5)
 
 The approved `design-review/` prototype is now integrated into `web/`, with real profiles, Supabase persistence, saved history and the existing number-recognition engine. The prototype and its sample-data replay remain separate development tools; they are not production routes.

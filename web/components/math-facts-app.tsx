@@ -207,6 +207,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
   const [preferences, setPreferences] = useState(defaultPreferences);
   const [comfortOpen, setComfortOpen] = useState(false);
   const [paused, setPaused] = useState(false);
+  const [waitingForNext, setWaitingForNext] = useState(false);
   const retryRef = useRef(false);
   const beforeAnswerRef = useRef<AutomaticProgress | null>(null);
   const pausedFeedbackRef = useRef(false);
@@ -474,6 +475,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
       return;
     }
     selectionRef.current = choice; retryRef.current = false;
+    setWaitingForNext(false);
     setListenState("Opening microphone…");
     setCurrent(choice.fact); setPendingWrong(null); setQuestionReady(false); setHeard(""); setResult(null);
     setProgress(prepared.session!.gradedCount);
@@ -529,7 +531,8 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
       next = beginAnswerExposure(next, card);
       setPendingWrong({ card, transcript, responseMs, attemptId: audit.id, previousState });
     }
-    nextRef.current = window.setTimeout(advance, !answerCorrect ? 4000 : passed ? 1200 : 1800);
+    setWaitingForNext(!answerCorrect);
+    if (answerCorrect) nextRef.current = window.setTimeout(advance, passed ? 1200 : 1800);
     persistAutomaticity(next);
   }, [advance, persistAutomaticity, stopListening, preferences]);
 
@@ -810,7 +813,6 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
     persistAutomaticity(beginAnswerExposure(next, pendingWrong.card));
     setResult({ text: "Recognition disputed · not a math mistake", tone: "slow" });
     setPendingWrong(null); setListenState("No speed or mastery result");
-    nextRef.current = window.setTimeout(advance, 1400);
   };
   const pausePractice = () => {
     if (nextRef.current !== null) window.clearTimeout(nextRef.current);
@@ -824,7 +826,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
     if (numberSpeechActiveRef.current) prepareSafariNumberAudio();
     if (automaticityRef.current) persistAutomaticity(resumeAutomaticSession(automaticityRef.current));
     setPaused(false);
-    if (pausedFeedbackRef.current) advance();
+    if (pausedFeedbackRef.current) { if (!waitingForNext) advance(); }
     else if (current) startListening(current);
   };
 
@@ -871,7 +873,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
   );
   const frameProps = { view, onNavigate: setView, onExit: () => setPhase("setup" as Phase), isAdmin, accountName, avatarStudentId: student?.id ?? (!cloudUser ? progressOwnerId : undefined), onPreferences: () => setComfortOpen(true) };
   const comfortDialog = comfortOpen && <PracticeDialog title="Make practice comfortable" onClose={() => setComfortOpen(false)}>
-    <p>Questions move on automatically. Pause whenever you need a break.</p>
+    <p>Correct answers move on automatically. After a wrong answer, choose Next question when you’re ready. Pause whenever you need a break.</p>
     {([["showTimes", "Show response times during practice"], ["successSound", "Short success sound"], ["motion", "Animated gumdrop celebrations"], ["celebrationSound", "Celebration music"]] as const).map(([key, label]) => <label className="check-row" key={key}><input type="checkbox" checked={preferences[key]} onChange={event => {
       const next = { ...preferences, [key]: event.target.checked }; setPreferences(next); try { localStorage.setItem(PREFERENCES_KEY, JSON.stringify(next)); } catch { /* Current visit still works. */ }
     }}/>{label}</label>)}
@@ -954,11 +956,12 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
         <div className="practice-feedback" aria-live="polite" aria-atomic="true">
           <div className={`result ${result?.tone ?? ""}`}>{result?.text ?? (questionReady ? "Say your answer aloud" : "Opening the microphone…")}</div>
           {result?.correctAnswer !== undefined && <div className="answer-reveal">{current.a} {operationSymbol(operation)} {current.b} = {result.correctAnswer}</div>}
-          {pendingWrong && <><p>Heard: <strong>{pendingWrong.transcript || "No answer"}</strong></p><button className="text-button" onClick={allowPendingAnswer}>That’s not what I said</button><small>Next question automatically in a moment.</small></>}
+          {pendingWrong && <><p>Heard: <strong>{pendingWrong.transcript || "No answer"}</strong></p><button className="text-button" onClick={allowPendingAnswer}>That’s not what I said</button></>}
+          {waitingForNext && <div className="answer-actions"><button className="button primary" onClick={advance}>{progress >= questionCount ? "See results" : "Next question"}</button></div>}
           {!result && recognitionFailed && <div className="recovery-actions"><p className="muted">{listenState}</p><button className="button primary" onClick={restartRecognition}>Try microphone again</button><p className="fine-print">No answer was scored. An adult can troubleshoot in Family controls.</p></div>}
         </div>
       </section>
-      <footer className="practice-controls"><div className="speech-controls"><span className={`mic ${listenState.startsWith("Listening") ? "listening" : ""}`} aria-hidden="true">◉</span><div className="speech-status"><div className="listen-state">{result ? listenState || "Answer recorded" : listenState}</div><small>Voice practice · questions advance automatically</small></div></div><div className="heard">{heard ? `Heard: ${heard}` : "Say your answer when Listening appears."}</div></footer>
+      <footer className="practice-controls"><div className="speech-controls"><span className={`mic ${listenState.startsWith("Listening") ? "listening" : ""}`} aria-hidden="true">◉</span><div className="speech-status"><div className="listen-state">{result ? listenState || "Answer recorded" : listenState}</div><small>Voice practice · correct answers advance automatically</small></div></div><div className="heard">{heard ? `Heard: ${heard}` : "Say your answer when Listening appears."}</div></footer>
       {paused && <PracticeDialog title="Your round is paused." onClose={resumePractice}><p>{progress} answers recorded. Nothing is timed while you take a break.</p><p className="muted">An unanswered question becomes retry practice, with no speed or mastery credit.</p><div className="form-row"><button className="button primary" onClick={resumePractice}>Resume practice</button><button className="button danger" onClick={exitPractice}>End &amp; save round</button></div></PracticeDialog>}
     </main>;
   }
@@ -1005,7 +1008,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
         <section className="practice-builder">
           <div className="round-plan"><p className="eyebrow">Your next round</p><h2>{operationLabel(operation)}</h2><p className="muted">Build quick recall.<br/>Choose any facts, any time.</p>
             <label>Round length<select value={questionCount} onChange={event => setQuestionCount(Number(event.target.value))}>{QUESTION_COUNT_OPTIONS.map(count => <option key={count} value={count}>{count} questions</option>)}</select></label>
-            <div className="voice-plan"><strong>◉ Speak your answers</strong><p>Questions move on automatically.<br/>Goal: start your answer within 1.50s.</p></div>
+            <div className="voice-plan"><strong>◉ Speak your answers</strong><p>Correct answers move on automatically. Review wrong answers at your own pace.<br/>Goal: start your answer within 1.50s.</p></div>
             <button className="button primary start-round" onClick={() => startPractice()} disabled={!speechSupported || numberSpeechStatus === "loading" || selectedCount === 0 || !progressReady}>{numberSpeechStatus === "loading" ? "Preparing voice…" : automaticity?.session && automaticity.session.status !== "ended" ? "Resume round" : "Start practice →"}</button>
             <p className="fine-print">{selectedCount ? `${selectedCount} facts selected · practice as much as you like` : "Choose at least one fact to begin."}</p>
             {numberSpeechStatus === "failed" && <p className="notice">Number recognition could not load. <button className="text-button" onClick={() => void enableNumberSpeech()}>Try again</button></p>}

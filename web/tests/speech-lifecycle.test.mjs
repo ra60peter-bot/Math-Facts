@@ -512,7 +512,7 @@ test("a correction after feedback preserves the first answer and cannot award au
   assert.equal(context.attemptsRef.current[1].heard, "51");
   assert.equal(context.attemptsRef.current[1].audit.disputed, true);
   assert.equal(retryGrade, undefined); assert.equal(feedback.tone, "slow");
-  assert.equal(next, context.advance);
+  assert.equal(next, undefined); // disputing recognition must also wait for Next question
 });
 test("network, permission and Safari audio interruptions do not record an answer", () => {
   for (const error of ["network", "not-allowed", "audio-capture", "audio-interrupted"]) {
@@ -542,7 +542,8 @@ test("practice feedback uses the inclusive 1.5-second cutoff and correct colors"
     [8, 1501, "Slow!", "slow"], [7, 700, "Wrong!", "wrong"],
     [null, 4000, "Wrong!", "wrong"],
   ]) {
-    let feedback;
+    let feedback, waitingForNext;
+    const timers = [];
     const context = {
       useCallback: fn => fn, answerHandledRef: { current: false },
       preferences: {showTimes:true,successSound:false}, retryRef:{current:false}, beforeAnswerRef:{current:null},
@@ -554,8 +555,8 @@ test("practice feedback uses the inclusive 1.5-second cutoff and correct colors"
       stopListening() {}, answerFor: () => 8, gradeResponse: () => "good",
       defaultState: () => ({}), updateCardState: () => ({}),
       setStates() {}, setHeard() {}, setListenState() {}, setProgress() {}, setPendingWrong() {},
-      setResult: value => { feedback = value; }, scheduleRetry() {}, advance() {},
-      window: { setTimeout() {} }, crypto: { randomUUID: () => "test" },
+      setResult: value => { feedback = value; }, setWaitingForNext: value => { waitingForNext = value; }, scheduleRetry() {}, advance() {},
+      window: { setTimeout(fn, ms) { timers.push({ fn, ms }); } }, crypto: { randomUUID: () => "test" },
       operationSymbol: () => "+",
     };
     vm.runInNewContext(code, context);
@@ -564,5 +565,24 @@ test("practice feedback uses the inclusive 1.5-second cutoff and correct colors"
     assert.equal(feedback.tone, tone);
     assert.ok(feedback.text.includes("seconds"));
     if (tone === "wrong") assert.equal(feedback.correctAnswer, 8);
+    assert.equal(waitingForNext, parsed !== 8);
+    assert.equal(timers.length, parsed === 8 ? 1 : 0);
+    if (parsed === 8) { assert.equal(timers[0].fn, context.advance); assert.equal(timers[0].ms, elapsed <= 1500 ? 1200 : 1800); }
+  }
+});
+
+test("resuming paused wrong-answer feedback waits for Next question", () => {
+  const begin = source.indexOf("  const resumePractice = () => {");
+  const end = source.indexOf("  const exitPractice =", begin);
+  const code = ts.transpileModule(source.slice(begin,end) + "\nglobalThis.resume = resumePractice;", {
+    compilerOptions: {target:ts.ScriptTarget.ES2020},
+  }).outputText;
+  for (const waitingForNext of [true,false]) {
+    let advanced = 0, listening = 0, paused = true;
+    const context = { waitingForNext, numberSpeechActiveRef:{current:false}, automaticityRef:{current:null},
+      pausedFeedbackRef:{current:true}, current:{id:"fact"}, setPaused:value => { paused=value; },
+      advance:()=>{advanced++;}, startListening:()=>{listening++;} };
+    vm.runInNewContext(code,context); context.resume();
+    assert.equal(paused,false); assert.equal(listening,0); assert.equal(advanced,waitingForNext ? 0 : 1);
   }
 });
