@@ -7,7 +7,7 @@ export async function GET(request:NextRequest) {
     const service=serviceClient(),device=await readDevice(request,service);
     if(!device)return NextResponse.json({profile:null,students:[]},{headers:{"Cache-Control":"no-store"}});
     const profile=await accountProfile(device.owner_id,service);
-    const {data,error}=await service.from("students").select("id,owner_id,display_name,created_at").eq("owner_id",device.owner_id).order("display_name");
+    const {data,error}=await service.from("students").select("id,owner_id,display_name,created_at").is("deleted_at",null).eq("owner_id",device.owner_id).order("display_name");
     if(error)throw new Error("Could not load students.");
     return NextResponse.json({profile,students:(data??[]).map(s=>({id:s.id,ownerId:s.owner_id,name:s.display_name,createdAt:s.created_at}))},{headers:{"Cache-Control":"no-store"}});
   }catch(error){return NextResponse.json({error:error instanceof Error?error.message:"Could not load profiles."},{status:403});}
@@ -29,7 +29,7 @@ export async function POST(request:NextRequest) {
     if(body.action==="student") {
       if(!device)throw new Error("An account owner must sign in on this device first.");
       const profile=await accountProfile(device.owner_id,service);
-      const {data:student,error}=await service.from("students").select("id,owner_id,display_name,created_at").eq("id",String(body.studentId)).eq("owner_id",device.owner_id).single();
+      const {data:student,error}=await service.from("students").select("id,owner_id,display_name,created_at").eq("id",String(body.studentId)).is("deleted_at",null).eq("owner_id",device.owner_id).single();
       if(error || !student)throw new Error("Student not found on this account.");
       const token=await issueGrant(device.id,"student",student.id,service);
       return NextResponse.json({token,mode:"student",profile,student:{id:student.id,ownerId:student.owner_id,name:student.display_name,createdAt:student.created_at}});

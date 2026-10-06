@@ -8,14 +8,14 @@ import ts from 'typescript';
 const root=path.resolve(import.meta.dirname,'..');
 function compile(file,imports={},extra={}) {
  const exports={};
- vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(root,file),'utf8'),{fileName:file,compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,{exports,require:n=>imports[n]??{},process:{env:{NEXT_PUBLIC_SUPABASE_URL:'https://test.invalid',SUPABASE_SERVICE_ROLE_KEY:'test',NEXT_PUBLIC_SUPABASE_ANON_KEY:'public'}},Date,...extra});
+ vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(root,file),'utf8'),{fileName:file,compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,{exports,require:n=>imports[n]??{},process:{env:{NEXT_PUBLIC_SUPABASE_URL:'https://test.invalid',SUPABASE_SERVICE_ROLE_KEY:'test',NEXT_PUBLIC_SUPABASE_ANON_KEY:'public'}},Date,Error,...extra});
  return exports;
 }
 function database(seed={}) {
- const tables={profiles:[{id:'owner',email:'owner@example.test',role:'user',access_status:'active'}],students:[{id:'alice',owner_id:'owner',display_name:'Alice'},{id:'bob',owner_id:'owner',display_name:'Bob'},{id:'outside',owner_id:'other',display_name:'Other'}],access_devices:[],access_grants:[],...seed};
+ const tables={profiles:[{id:'owner',email:'owner@example.test',role:'user',access_status:'active'},{id:'other',role:'user',access_status:'active'}],students:[{id:'alice',owner_id:'owner',display_name:'Alice'},{id:'bob',owner_id:'owner',display_name:'Bob'},{id:'outside',owner_id:'other',display_name:'Other'}],access_devices:[],access_grants:[],...seed};
  const service={auth:{admin:{getUserById:async id=>({data:{user:{id}}})},getUser:async()=>({data:{user:{id:'owner'}}})},from(table){
  let filters=[],action='read',values;
- const q={select:()=>q,eq:(k,v)=>{filters.push(r=>r[k]===v);return q;},gt:(k,v)=>{filters.push(r=>r[k]>v);return q;},order:()=>q,delete:()=>{action='delete';return q;},insert:v=>{action='insert';values=v;return q;},upsert:v=>{action='upsert';values=v;return q;},single:async()=>execute(true),maybeSingle:async()=>execute(true),then:(resolve,reject)=>Promise.resolve(execute(false)).then(resolve,reject)};
+ const q={select:()=>q,is:(k,v)=>{filters.push(r=>(r[k]??null)===v);return q;},eq:(k,v)=>{filters.push(r=>r[k]===v);return q;},gt:(k,v)=>{filters.push(r=>r[k]>v);return q;},order:()=>q,delete:()=>{action='delete';return q;},insert:v=>{action='insert';values=v;return q;},upsert:v=>{action='upsert';values=v;return q;},single:async()=>execute(true),maybeSingle:async()=>execute(true),then:(resolve,reject)=>Promise.resolve(execute(false)).then(resolve,reject)};
  function execute(single) {
   if(action==='insert')tables[table].push({id:'device',...values});
   if(action==='upsert'){tables[table]=tables[table].filter(r=>r.device_id!==values.device_id);tables[table].push({...values});}
@@ -103,8 +103,9 @@ test('only verified password login creates an ordinary owner grant; Google conne
 });
 test('every existing account-management route enforces owner/admin guard',async()=>{
  const s=setup(),token=await s.server.issueGrant('device','student','alice',s.service);
- for(const [file,method] of [['students/route.ts','GET'],['students/route.ts','POST'],['students/[id]/route.ts','DELETE'],['sessions/[id]/route.ts','DELETE'],['users/route.ts','GET'],['users/[id]/route.ts','DELETE'],['invites/route.ts','POST']]){
-  const route=compile(`app/api/${file}`,{'next/server':{NextResponse},'../../../lib/admin-server':s.admin,'../../../../lib/admin-server':s.admin});
+ for(const [file,method] of [['students/route.ts','GET'],['students/route.ts','POST'],['students/[id]/route.ts','DELETE'],['students/[id]/route.ts','PATCH'],['recently-deleted/route.ts','GET'],['sessions/[id]/route.ts','DELETE'],['users/route.ts','GET'],['users/[id]/route.ts','DELETE'],['users/[id]/route.ts','PATCH'],['invites/route.ts','POST']]){
+  const deletion=compile('lib/profile-deletion.ts',{'next/server':{NextResponse},'./admin-server':s.admin});
+  const route=compile(`app/api/${file}`,{'next/server':{NextResponse},'../../../lib/admin-server':s.admin,'../../../../lib/admin-server':s.admin,'../../../../lib/profile-deletion':deletion});
   const result=await route[method](s.req(token,{},method),{params:Promise.resolve({id:'alice'})});
   assert.equal(result.status,403,file);
  }
@@ -148,3 +149,40 @@ test('invitation setup requires matching passwords before opening student manage
  assert.equal(steps.at(-1)[1],'/');assert.equal(values[0],'');assert.equal(values[1],'');
 });
 
+
+test('deleted owners and students cannot use stale grants; deleted profiles stay off picker',async()=>{
+ const s=setup(), token=await s.server.issueGrant('device','student','alice',s.service);
+ s.tables.students[0].deleted_at=new Date().toISOString();
+ await assert.rejects(s.server.requireStudentAccess(s.req(token),'alice'),/not permitted/);
+ const route=compile('app/api/access/route.ts',{'next/server':{NextResponse},'../../../lib/access-server':{...s.server,serviceClient:()=>s.service}});
+ assert.equal((await route.GET(s.req())).body.students.some(s=>s.id==='alice'),false);
+ assert.equal((await route.POST(s.req('',{action:'student',studentId:'alice'}))).status,403);
+ s.tables.students[0].deleted_at=null;s.tables.profiles[0].deleted_at=new Date().toISOString();
+ await assert.rejects(s.server.readAccess(s.req(token)),/does not have access/);
+ assert.equal((await route.GET(s.req())).status,403);
+});
+
+test('recovery UI restores the selected profile, refreshes active lists, and reports server rejection',async()=>{
+ const state=[],effects=[],calls=[];let cursor=0,fail=false,refreshed=0;
+ let entries=[{id:'alice',kind:'student',name:'Alice',restoreUntil:'2030-01-01T00:00:00Z'}];
+ const jsx=(type,props)=>({type,props});
+ const component=compile('components/recently-deleted.tsx',{
+  react:{useState:initial=>{const i=cursor++;if(!(i in state))state[i]=initial;return [state[i],v=>{state[i]=v;}];},useEffect:fn=>effects.push(fn),useCallback:fn=>fn},
+  'react/jsx-runtime':{jsx,jsxs:jsx},
+  '../lib/access-client':{accessRequest:async(url,init)=>{
+   calls.push([url,init?.method??'GET']);
+   if(init?.method==='PATCH'){if(fail)throw new Error('The 30-day recovery period has ended');entries=[];return {ok:true};}
+   return {entries};
+  }},
+ });
+ const render=()=>{cursor=0;return component.RecentlyDeleted({refreshKey:1,onRestored:async()=>{refreshed++;}});};
+ const nodes=(node)=>!node||typeof node!=='object'?[]:[node,...[node.props?.children].flat(Infinity).flatMap(nodes)];
+ render();effects[0]();await new Promise(resolve=>setImmediate(resolve));
+ fail=true;await nodes(render()).find(n=>n.type==='button').props.onClick();await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(refreshed,0);assert.match(JSON.stringify(render()),/30-day recovery period/);
+ assert.equal(nodes(render()).filter(n=>n.type==='button').length,1);
+ fail=false;await nodes(render()).find(n=>n.type==='button').props.onClick();await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(refreshed,1);assert.match(JSON.stringify(render()),/Alice was restored with their saved history/);
+ assert.equal(nodes(render()).filter(n=>n.type==='button').length,0);
+ assert.deepEqual(calls.filter(c=>c[1]==='PATCH'),[['/api/students/alice','PATCH'],['/api/students/alice','PATCH']]);
+});

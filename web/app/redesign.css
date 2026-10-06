@@ -224,3 +224,12 @@ button:focus-visible, summary:focus-visible, a:focus-visible { outline:3px solid
 
 .practice-builder .fact-grid{width:100%;min-width:300px}.practice-builder .axis-toggle,.practice-builder .fact-cell{height:28px;min-height:28px}.practice-builder .fact-grid input{min-width:13px}
 @media(min-width:851px){.redesign-shell .main{padding-top:50px}.practice-heading{margin-bottom:18px}.practice-heading h1{font-size:34px}.operation-tabs{margin:18px 0}}
+
+/* Recovery stays available to account owners without crowding management. */
+.recently-deleted { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--border); }
+.recovery-list { list-style: none; padding: 0; margin: 16px 0 0; }
+.recovery-list li { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--border); }
+.recovery-list strong { overflow-wrap: anywhere; }
+.recovery-list .fine-print { margin: 5px 0 0; }
+.recovery-list .button { flex-shrink: 0; }
+@media (max-width: 540px) { .recovery-list li { align-items: flex-start; flex-direction: column; } }

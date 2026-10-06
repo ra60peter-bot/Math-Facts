@@ -11,8 +11,8 @@ export async function GET(request: NextRequest) {
     { data: sessions, error: sessionError },
     { data: attempts, error: attemptError },
   ] = await Promise.all([
-    auth.service.from("profiles").select("id,email,display_name,role,access_status,is_admin,created_at").order("created_at"),
-    auth.service.from("students").select("id,owner_id,display_name,created_at,automaticity").order("display_name"),
+    auth.service.from("profiles").select("id,email,display_name,role,access_status,is_admin,created_at").is("deleted_at", null).order("created_at"),
+    auth.service.from("students").select("id,owner_id,display_name,created_at,automaticity").is("deleted_at", null).order("display_name"),
     auth.service.from("practice_sessions").select("id,student_id,operation,started_at,ended_at").order("ended_at", { ascending: false }),
     auth.service.from("attempts").select("id,session_id,fact,operation,answer_correct,is_correct,response_ms,heard,created_at,automaticity_audit").order("created_at"),
   ]);

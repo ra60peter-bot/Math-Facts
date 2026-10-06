@@ -10,9 +10,11 @@ export async function POST(request: NextRequest) {
 
   const { data: existingProfile } = await auth.service
     .from("profiles")
-    .select("id,access_status")
+    .select("id,access_status,deleted_at")
     .eq("email", email)
     .maybeSingle();
+
+  if (existingProfile?.deleted_at) return NextResponse.json({ error: "This account is in Recently deleted. Restore it there instead of inviting it again." }, { status: 409 });
 
   const { error: invitationError } = await auth.service.from("account_invitations").upsert({
     email,

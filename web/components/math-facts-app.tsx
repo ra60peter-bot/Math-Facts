@@ -16,6 +16,7 @@ import { accessRequest } from "../lib/access-client";
 import { SpeechTest } from "./speech-test";
 import { MasteryProgress } from "./mastery-progress";
 import { MicrophoneCheck } from "./microphone-check";
+import { RecentlyDeleted } from "./recently-deleted";
 import { BrandLogo } from "./brand-logo";
 import { StudentAvatar } from "./student-avatar";
 import { PracticeDialog } from "./practice-dialog";
@@ -47,6 +48,8 @@ type ManagedUser = { id: string; email: string; displayName: string | null; role
 type LocalUser = { id: string; name: string; createdAt: string };
 const STORAGE_KEY = "math-facts-web-local-progress";
 const VOICE_MAPPINGS_KEY = "math-facts-web-voice-mappings";
+type DeletedLocalUser = LocalUser & { deletedAt: string };
+const LOCAL_DELETED_USERS_KEY = "math-facts-web-deleted-users";
 const LOCAL_USERS_KEY = "math-facts-web-local-users";
 const LOCAL_ACTIVE_USER_KEY = "math-facts-web-active-user";
 const ACTIVE_STUDENT_KEY = "math-facts-web-active-student";
@@ -129,10 +132,24 @@ export function MathFactsApp() {
 
 function LocalMode() {
   const [users, setUsers] = useState<LocalUser[]>([DEFAULT_LOCAL_USER]);
+  const [deletedUsers, setDeletedUsers] = useState<DeletedLocalUser[]>([]);
   const [choosing, setChoosing] = useState(true);
   const [activeUserId, setActiveUserId] = useState(DEFAULT_LOCAL_USER.id);
 
   useEffect(() => {
+    try {
+      const archived = JSON.parse(localStorage.getItem(LOCAL_DELETED_USERS_KEY) ?? "[]") as DeletedLocalUser[];
+      const retained = archived.filter(user => Date.parse(user.deletedAt) + 30 * 86400000 > Date.now());
+      for (const user of archived) if (!retained.includes(user)) {
+        localStorage.removeItem(progressStorageKey(user.id));
+        localStorage.removeItem(voiceMappingsStorageKey(user.id));
+        if (user.id === DEFAULT_LOCAL_USER.id) {
+          localStorage.removeItem(STORAGE_KEY); localStorage.removeItem(`${VOICE_MAPPINGS_KEY}:local`);
+        }
+      }
+      localStorage.setItem(LOCAL_DELETED_USERS_KEY, JSON.stringify(retained));
+      setDeletedUsers(retained);
+    } catch { /* Keep saved practice intact if browser storage is unavailable. */ }
     const savedUsers = readLocalUsers();
     const savedActiveUserId = localStorage.getItem(LOCAL_ACTIVE_USER_KEY);
     setUsers(savedUsers);
@@ -151,14 +168,26 @@ function LocalMode() {
 
   const deleteUser = (userId: string) => {
     if (users.length <= 1) return;
+    const deleted = users.find(user => user.id === userId);
+    if (!deleted) return;
+    const archived = [...deletedUsers, { ...deleted, deletedAt: new Date().toISOString() }];
+    localStorage.setItem(LOCAL_DELETED_USERS_KEY, JSON.stringify(archived));
+    setDeletedUsers(archived);
     const nextUsers = users.filter((user) => user.id !== userId);
     persistUsers(nextUsers);
-    localStorage.removeItem(progressStorageKey(userId));
-    localStorage.removeItem(voiceMappingsStorageKey(userId));
     if (activeUserId === userId) {
       setActiveUserId(nextUsers[0].id);
       localStorage.setItem(LOCAL_ACTIVE_USER_KEY, nextUsers[0].id);
     }
+  };
+
+  const restoreUser = (userId: string) => {
+    const user = deletedUsers.find(user => user.id === userId);
+    if (!user || Date.parse(user.deletedAt) + 30 * 86400000 <= Date.now()) throw new Error("The 30-day recovery period has ended. Reload to update the list.");
+    persistUsers([...users, { id: user.id, name: user.name, createdAt: user.createdAt }]);
+    const archived = deletedUsers.filter(user => user.id !== userId);
+    localStorage.setItem(LOCAL_DELETED_USERS_KEY, JSON.stringify(archived));
+    setDeletedUsers(archived);
   };
 
   const selectUser = (userId: string) => {
@@ -173,6 +202,8 @@ function LocalMode() {
     cloudUser={null}
     isAdmin
     localUsers={users}
+    deletedLocalUsers={deletedUsers}
+    onRestoreLocalUser={restoreUser}
     localUserId={activeUser.id}
     localUserName={activeUser.name}
     onAddLocalUser={addUser}
@@ -188,6 +219,8 @@ type PracticeAppProps = {
   account?: AccountProfile | null;
   isAdmin?: boolean;
   localUsers?: LocalUser[];
+  deletedLocalUsers?: DeletedLocalUser[];
+  onRestoreLocalUser?: (userId: string) => void;
   localUserId?: string;
   localUserName?: string;
   onAddLocalUser?: (name: string) => void;
@@ -195,7 +228,7 @@ type PracticeAppProps = {
   onSelectLocalUser?: (userId: string) => void;
 };
 
-function PracticeApp({ student, initialView = "practice", cloudUser, account = null, isAdmin: localAdmin = false, localUsers = [], localUserId, localUserName, onAddLocalUser, onDeleteLocalUser, onSelectLocalUser }: PracticeAppProps) {
+function PracticeApp({ student, initialView = "practice", cloudUser, account = null, isAdmin: localAdmin = false, localUsers = [], deletedLocalUsers = [], onRestoreLocalUser, localUserId, localUserName, onAddLocalUser, onDeleteLocalUser, onSelectLocalUser }: PracticeAppProps) {
   const isAdmin = !student && (account?.role === "admin" || localAdmin);
   const [cloudStudents, setCloudStudents] = useState<StudentProfile[]>(student ? [student] : []);
   const [studentsLoading, setStudentsLoading] = useState(Boolean(cloudUser) && !student);
@@ -899,6 +932,8 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
             activeUserId={progressOwnerId}
             onAddUser={onAddLocalUser ?? (() => undefined)}
             onDeleteUser={onDeleteLocalUser ?? (() => undefined)}
+            deletedUsers={deletedLocalUsers}
+            onRestoreUser={onRestoreLocalUser ?? (() => undefined)}
             onSelectUser={onSelectLocalUser ?? (() => undefined)}
           />}
       <div className="owner-microphone-help"><button className="text-button" onClick={() => setView("microphone")}>Microphone help</button><span>Sound check and recognition settings</span></div>
@@ -1100,17 +1135,17 @@ function StudentManagement({ students, activeStudentId, accountId, onSelectStude
     try {
       await accountRequest(`/api/students/${student.id}`, { method: "DELETE" });
       setPendingDeleteId("");
-      setMessage(`${student.name} and all associated progress were deleted.`);
+      setMessage(`${student.name} was moved to Recently deleted. Restore within 30 days to recover their history and progress.`);
       await onChanged();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "The student could not be deleted.");
     }
   }
 
-  return <div className="users-view"><div className="topbar"><div><h1>Students</h1><p className="muted">Account owners create and remove student profiles. Students select their name before practicing.</p></div></div><section className="user-toolbar"><h2>Add student</h2><form className="form-row" onSubmit={addStudent}><label>Name<input type="text" required maxLength={60} value={name} onChange={(event) => setName(event.target.value)} /></label><button className="button primary">Add student</button></form>{message && <p className="notice">{message}</p>}</section><section><h2>Student profiles</h2>{students.length === 0 ? <p className="empty">No students yet.</p> : <div className="table-scroll"><table className="history-table"><thead><tr><th>Student</th><th>Account</th><th>Added</th><th>Actions</th></tr></thead><tbody>{students.map((student) => <tr key={student.id}><td><strong>{student.name}</strong>{student.id === activeStudentId && <span className="role-label">Selected</span>}</td><td>{student.ownerEmail ?? "This account"}</td><td>{new Date(student.createdAt).toLocaleDateString()}</td><td><div className="table-actions">{student.id !== activeStudentId && <button className="button primary" onClick={() => onSelectStudent(student.id)}>Select</button>}{pendingDeleteId === student.id ? <><button className="button secondary" onClick={() => setPendingDeleteId("")}>Cancel</button><button className="button danger" onClick={() => void deleteStudent(student)}>Confirm delete</button></> : <button className="button danger" onClick={() => setPendingDeleteId(student.id)}>Delete</button>}</div></td></tr>)}</tbody></table></div>}</section></div>;
+  return <div className="users-view"><div className="topbar"><div><h1>Students</h1><p className="muted">Account owners create and remove student profiles. Students select their name before practicing.</p></div></div><section className="user-toolbar"><h2>Add student</h2><form className="form-row" onSubmit={addStudent}><label>Name<input type="text" required maxLength={60} value={name} onChange={(event) => setName(event.target.value)} /></label><button className="button primary">Add student</button></form>{message && <p className="notice">{message}</p>}</section><section><h2>Student profiles</h2>{students.length === 0 ? <p className="empty">No students yet.</p> : <div className="table-scroll"><table className="history-table"><thead><tr><th>Student</th><th>Account</th><th>Added</th><th>Actions</th></tr></thead><tbody>{students.map((student) => <tr key={student.id}><td><strong>{student.name}</strong>{student.id === activeStudentId && <span className="role-label">Selected</span>}</td><td>{student.ownerEmail ?? "This account"}</td><td>{new Date(student.createdAt).toLocaleDateString()}</td><td><div className="table-actions">{student.id !== activeStudentId && <button className="button primary" onClick={() => onSelectStudent(student.id)}>Select</button>}{pendingDeleteId === student.id ? <><button className="button secondary" onClick={() => setPendingDeleteId("")}>Cancel</button><button className="button danger" onClick={() => void deleteStudent(student)}>Confirm delete</button></> : <button className="button danger" onClick={() => setPendingDeleteId(student.id)}>Delete</button>}</div></td></tr>)}</tbody></table></div>}</section><RecentlyDeleted refreshKey={students} onRestored={onChanged} /></div>;
 }
 
-function LocalUserManagement({ users, activeUserId, onAddUser, onDeleteUser, onSelectUser }: { users: LocalUser[]; activeUserId: string; onAddUser: (name: string) => void; onDeleteUser: (userId: string) => void; onSelectUser: (userId: string) => void }) {
+function LocalUserManagement({ users, deletedUsers, onRestoreUser, activeUserId, onAddUser, onDeleteUser, onSelectUser }: { users: LocalUser[]; deletedUsers: DeletedLocalUser[]; onRestoreUser: (id: string) => void; activeUserId: string; onAddUser: (name: string) => void; onDeleteUser: (userId: string) => void; onSelectUser: (userId: string) => void }) {
   const [selectedUserId, setSelectedUserId] = useState(activeUserId);
   const [pendingDeleteUserId, setPendingDeleteUserId] = useState("");
   const [name, setName] = useState("");
@@ -1138,10 +1173,10 @@ function LocalUserManagement({ users, activeUserId, onAddUser, onDeleteUser, onS
     onDeleteUser(user.id);
     if (selectedUserId === user.id) setSelectedUserId(users.find((candidate) => candidate.id !== user.id)?.id ?? "");
     setPendingDeleteUserId("");
-    setMessage(`${user.name} was deleted.`);
+    setMessage(`${user.name} was moved to Recently deleted for 30 days.`);
   }
 
-  return <div className="users-view"><div className="topbar"><div><h1>Admin</h1><p className="muted">Add learners, switch the active learner, review performance, and remove local accounts.</p></div></div><section className="user-toolbar"><h2>Add user</h2><form className="form-row" onSubmit={addUser}><label>Name<input type="text" required maxLength={60} value={name} onChange={(event) => setName(event.target.value)} /></label><button className="button primary">Add user</button></form>{message && <p className="notice">{message}</p>}</section><section><h2>Users</h2><div className="table-scroll"><table className="history-table"><thead><tr><th>User</th><th>Added</th><th>Sessions</th><th>Last practice</th><th>Actions</th></tr></thead><tbody>{userRecords.map(({ user, progress }) => <tr key={user.id}><td><strong>{user.name}</strong>{user.id === activeUserId && <span className="role-label">Active</span>}</td><td>{user.createdAt ? new Date(user.createdAt).toLocaleDateString() : "Local profile"}</td><td>{progress.sessions.length}</td><td>{progress.sessions[0] ? new Date(progress.sessions[0].endedAt).toLocaleDateString() : "Never"}</td><td><div className="table-actions">{user.id !== activeUserId && <button className="button primary" onClick={() => onSelectUser(user.id)}>Use user</button>}<button className="button secondary" onClick={() => setSelectedUserId(user.id)}>View history</button>{pendingDeleteUserId === user.id ? <><button className="button secondary" onClick={() => setPendingDeleteUserId("")}>Cancel</button><button className="button danger" onClick={() => deleteUser(user)}>Confirm delete</button></> : <button className="button danger" disabled={users.length <= 1} onClick={() => setPendingDeleteUserId(user.id)}>Delete</button>}</div></td></tr>)}</tbody></table></div></section>{selectedRecord && <section className="user-history"><h2>{selectedRecord.user.name} history</h2><HistoryProgress key={selectedRecord.user.id} name={selectedRecord.user.name} sessions={selectedRecord.progress.sessions} progress={selectedRecord.progress.automaticity}><SessionHistory sessions={selectedRecord.progress.sessions} detailedDates /></HistoryProgress></section>}</div>;
+  return <div className="users-view"><div className="topbar"><div><h1>Admin</h1><p className="muted">Add learners, switch the active learner, review performance, and remove local accounts.</p></div></div><section className="user-toolbar"><h2>Add user</h2><form className="form-row" onSubmit={addUser}><label>Name<input type="text" required maxLength={60} value={name} onChange={(event) => setName(event.target.value)} /></label><button className="button primary">Add user</button></form>{message && <p className="notice">{message}</p>}</section><section><h2>Users</h2><div className="table-scroll"><table className="history-table"><thead><tr><th>User</th><th>Added</th><th>Sessions</th><th>Last practice</th><th>Actions</th></tr></thead><tbody>{userRecords.map(({ user, progress }) => <tr key={user.id}><td><strong>{user.name}</strong>{user.id === activeUserId && <span className="role-label">Active</span>}</td><td>{user.createdAt ? new Date(user.createdAt).toLocaleDateString() : "Local profile"}</td><td>{progress.sessions.length}</td><td>{progress.sessions[0] ? new Date(progress.sessions[0].endedAt).toLocaleDateString() : "Never"}</td><td><div className="table-actions">{user.id !== activeUserId && <button className="button primary" onClick={() => onSelectUser(user.id)}>Use user</button>}<button className="button secondary" onClick={() => setSelectedUserId(user.id)}>View history</button>{pendingDeleteUserId === user.id ? <><button className="button secondary" onClick={() => setPendingDeleteUserId("")}>Cancel</button><button className="button danger" onClick={() => deleteUser(user)}>Confirm delete</button></> : <button className="button danger" disabled={users.length <= 1} onClick={() => setPendingDeleteUserId(user.id)}>Delete</button>}</div></td></tr>)}</tbody></table></div></section>{selectedRecord && <section className="user-history"><h2>{selectedRecord.user.name} history</h2><HistoryProgress key={selectedRecord.user.id} name={selectedRecord.user.name} sessions={selectedRecord.progress.sessions} progress={selectedRecord.progress.automaticity}><SessionHistory sessions={selectedRecord.progress.sessions} detailedDates /></HistoryProgress></section>}<section className="recently-deleted"><h2>Recently deleted</h2><p className="muted">Local profiles and their history can be restored for 30 days on this browser. Expired profiles are removed the next time this app opens.</p><ul className="recovery-list">{deletedUsers.map(user => <li key={user.id}><div><strong>{user.name}</strong><p className="fine-print">Restore before {new Date(Date.parse(user.deletedAt) + 30 * 86400000).toLocaleString()}</p></div><button className="button secondary" onClick={() => { try { onRestoreUser(user.id); setMessage(`${user.name} was restored with their history.`); } catch (error) { setMessage(error instanceof Error ? error.message : "Could not restore user."); } }}>Restore user</button></li>)}</ul></section></div>;
 }
 
 function SessionHistory({ sessions, detailedDates = false, onDelete, initiallyExpanded = false }: { sessions: SavedSession[]; detailedDates?: boolean; onDelete?: (id: string) => Promise<void>; initiallyExpanded?: boolean }) {
@@ -1223,7 +1258,6 @@ function UserManagement({ currentUserId }: { currentUserId: string }) {
       const loaded = payload.users as ManagedUser[];
       setUsers(loaded);
       setSelectedUserId((current) => current && loaded.some((user) => user.id === current) ? current : (loaded.find((user) => user.role !== "admin")?.id ?? loaded[0]?.id ?? ""));
-      setMessage("");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Users could not be loaded.");
     } finally {
@@ -1246,11 +1280,11 @@ function UserManagement({ currentUserId }: { currentUserId: string }) {
   }
 
   async function deleteUser(user: ManagedUser) {
-    const confirmed = window.confirm(`Permanently delete ${user.email} and all of this user's practice history? This cannot be undone.`);
+    const confirmed = window.confirm(`Delete ${user.email}? Their students, history and progress will be kept for 30 days. You can restore this account from Recently deleted.`);
     if (!confirmed) return;
     try {
       await accountRequest(`/api/users/${user.id}`, { method: "DELETE" });
-      setMessage(`${user.email} was deleted.`);
+      setMessage(`${user.email} was moved to Recently deleted. You have 30 days to restore the account.`);
       await loadUsers();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "The user could not be deleted.");
@@ -1274,10 +1308,10 @@ function UserManagement({ currentUserId }: { currentUserId: string }) {
   }
 
   async function deleteStudent(student: ManagedStudent) {
-    if (!window.confirm(`Permanently delete ${student.name} and all associated practice history?`)) return;
+    if (!window.confirm(`Delete ${student.name}? Their history and progress will be kept for 30 days. You can restore them from Recently deleted.`)) return;
     try {
       await accountRequest(`/api/students/${student.id}`, { method: "DELETE" });
-      setMessage(`${student.name} was deleted.`);
+      setMessage(`${student.name} was moved to Recently deleted. You have 30 days to restore the student.`);
       setSelectedStudentId("");
       await loadUsers();
     } catch (error) {
@@ -1288,7 +1322,7 @@ function UserManagement({ currentUserId }: { currentUserId: string }) {
   return <div className="users-view"><div className="topbar"><div><h1>Admin</h1><p className="muted">Invite account owners, manage every student, and review all performance.</p></div></div><section className="user-toolbar"><h2>Invite user</h2><form className="form-row" onSubmit={invite}><label>Email<input type="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></label><button className="button primary">Send invitation</button></form>{message && <p className="notice">{message}</p>}</section><section><h2>Accounts</h2>{loading ? <p className="empty">Loading users...</p> : users.length === 0 ? <p className="empty">No users found.</p> : <div className="table-scroll"><table className="history-table"><thead><tr><th>User</th><th>Status</th><th>Students</th><th>Sessions</th><th>Actions</th></tr></thead><tbody>{users.map((user) => {
     const allSessions = user.students.flatMap((student) => student.sessions);
     return <tr key={user.id}><td><strong>{user.displayName || user.email}</strong>{user.role === "admin" && <span className="role-label">Admin</span>}<br /><span className="muted">{user.email}</span></td><td>{user.status}</td><td>{user.students.length}</td><td>{allSessions.length}</td><td><div className="table-actions"><button className="button secondary" onClick={() => { setSelectedUserId(user.id); setSelectedStudentId(""); }}>Manage</button>{user.role !== "admin" && user.id !== currentUserId && <button className="button danger" onClick={() => void deleteUser(user)}>Delete user</button>}</div></td></tr>;
-  })}</tbody></table></div>}</section>{selectedUser && <section className="user-history"><h2>{selectedUser.displayName || selectedUser.email} students</h2><form className="form-row" onSubmit={addStudent}><label>Student name<input type="text" required maxLength={60} value={studentName} onChange={(event) => setStudentName(event.target.value)} /></label><button className="button primary">Add student</button></form>{selectedUser.students.length === 0 ? <p className="empty">No students yet.</p> : <div className="table-scroll"><table className="history-table"><thead><tr><th>Student</th><th>Added</th><th>Sessions</th><th>Actions</th></tr></thead><tbody>{selectedUser.students.map((student) => <tr key={student.id}><td><strong>{student.name}</strong></td><td>{new Date(student.createdAt).toLocaleDateString()}</td><td>{student.sessions.length}</td><td><div className="table-actions"><button className="button secondary" onClick={() => setSelectedStudentId(student.id)}>View history</button><button className="button danger" onClick={() => void deleteStudent(student)}>Delete student</button></div></td></tr>)}</tbody></table></div>}{selectedStudent && <div className="user-history"><h2>{selectedStudent.name} history</h2><HistoryProgress key={selectedStudent.id} name={selectedStudent.name} sessions={selectedStudent.sessions} progress={selectedStudent.reportProgress}><AdminSessionHistory sessions={selectedStudent.sessions} /></HistoryProgress></div>}</section>}</div>;
+  })}</tbody></table></div>}</section>{selectedUser && <section className="user-history"><h2>{selectedUser.displayName || selectedUser.email} students</h2><form className="form-row" onSubmit={addStudent}><label>Student name<input type="text" required maxLength={60} value={studentName} onChange={(event) => setStudentName(event.target.value)} /></label><button className="button primary">Add student</button></form>{selectedUser.students.length === 0 ? <p className="empty">No students yet.</p> : <div className="table-scroll"><table className="history-table"><thead><tr><th>Student</th><th>Added</th><th>Sessions</th><th>Actions</th></tr></thead><tbody>{selectedUser.students.map((student) => <tr key={student.id}><td><strong>{student.name}</strong></td><td>{new Date(student.createdAt).toLocaleDateString()}</td><td>{student.sessions.length}</td><td><div className="table-actions"><button className="button secondary" onClick={() => setSelectedStudentId(student.id)}>View history</button><button className="button danger" onClick={() => void deleteStudent(student)}>Delete student</button></div></td></tr>)}</tbody></table></div>}{selectedStudent && <div className="user-history"><h2>{selectedStudent.name} history</h2><HistoryProgress key={selectedStudent.id} name={selectedStudent.name} sessions={selectedStudent.sessions} progress={selectedStudent.reportProgress}><AdminSessionHistory sessions={selectedStudent.sessions} /></HistoryProgress></div>}</section>}<RecentlyDeleted refreshKey={users} onRestored={loadUsers} /></div>;
 }
 
 function AdminSessionHistory({ sessions }: { sessions: AdminSessionSummary[] }) {

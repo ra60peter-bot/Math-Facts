@@ -7,7 +7,8 @@ export async function GET(request: NextRequest) {
 
   let query = auth.service
     .from("students")
-    .select("id,owner_id,display_name,created_at")
+    .select("id,owner_id,display_name,created_at,profiles!students_owner_id_fkey!inner(deleted_at)")
+    .is("deleted_at", null).is("profiles.deleted_at", null)
     .order("display_name");
   if (auth.role !== "admin") query = query.eq("owner_id", auth.user.id);
   const { data, error } = await query;
@@ -41,7 +42,7 @@ export async function POST(request: NextRequest) {
   const { data: owner } = await auth.service
     .from("profiles")
     .select("id,role,access_status")
-    .eq("id", ownerId)
+    .eq("id", ownerId).is("deleted_at", null)
     .single();
   if (!owner || owner.access_status !== "active") return NextResponse.json({ error: "Account owner not found." }, { status: 404 });
 
@@ -51,7 +52,7 @@ export async function POST(request: NextRequest) {
     .select("id,owner_id,display_name,created_at")
     .single();
   if (error) {
-    const message = error.code === "23505" ? "That account already has a student with this name." : error.message;
+    const message = error.code === "23505" ? "That name is already in use, possibly in Recently deleted. Restore that student or choose another name." : error.message;
     return NextResponse.json({ error: message }, { status: 400 });
   }
   return NextResponse.json({ student: { id: data.id, ownerId: data.owner_id, name: data.display_name, createdAt: data.created_at } }, { status: 201 });

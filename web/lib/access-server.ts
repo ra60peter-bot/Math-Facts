@@ -22,8 +22,8 @@ export async function readDevice(request:NextRequest, service=serviceClient()) {
   return data;
 }
 export async function accountProfile(id:string,service=serviceClient()) {
-  const {data,error}=await service.from("profiles").select("id,email,display_name,role,is_admin,access_status").eq("id",id).single();
-  if(error || !data || data.access_status!=="active")throw new Error("This account does not have access. Ask the administrator for an invitation.");
+  const {data,error}=await service.from("profiles").select("id,email,display_name,role,is_admin,access_status,deleted_at").eq("id",id).single();
+  if(error || !data || data.access_status!=="active" || data.deleted_at)throw new Error("This account does not have access. Ask the administrator for an invitation.");
   return {id:data.id,email:data.email,displayName:data.display_name,role:data.role==="admin"||data.is_admin?"admin" as const:"user" as const,status:"active" as const};
 }
 export async function registerDevice(request:NextRequest,response:NextResponse,ownerId:string,service=serviceClient()) {
@@ -57,7 +57,8 @@ export async function readAccess(request:NextRequest) {
 export async function requireStudentAccess(request:NextRequest,studentId:string) {
   const access=await readAccess(request);
   if(access.grant.mode==="student" && access.grant.student_id!==studentId)throw new Error("This student can only access their own practice and history.");
-  const {data:student,error}=await access.service.from("students").select("id,owner_id,display_name").eq("id",studentId).single();
+  const {data:student,error}=await access.service.from("students").select("id,owner_id,display_name").eq("id",studentId).is("deleted_at",null).single();
   if(error||!student|| (student.owner_id!==access.device.owner_id && !(access.grant.mode==="owner"&&access.profile.role==="admin")))throw new Error("Student access is not permitted.");
+  await accountProfile(student.owner_id, access.service);
   return {...access,student};
 }
