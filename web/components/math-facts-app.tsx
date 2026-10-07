@@ -566,7 +566,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
       setPendingWrong({ card, transcript, responseMs, attemptId: audit.id, previousState });
     }
     setWaitingForNext(!answerCorrect);
-    if (answerCorrect) nextRef.current = window.setTimeout(advance, passed ? 1200 : 1800);
+    if (answerCorrect) nextRef.current = window.setTimeout(advance, 800);
     persistAutomaticity(next);
   }, [advance, persistAutomaticity, stopListening, preferences]);
 
