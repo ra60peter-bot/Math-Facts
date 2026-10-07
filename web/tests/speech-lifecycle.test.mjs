@@ -254,26 +254,12 @@ test("live numeric feedback appears immediately without prematurely saving a par
   assert.equal(h.feedback.at(-1),null);
   assert.equal(h.answers.length, 0);
   h.clock(800); h.recognition.onspeechstart(); h.result("twenty eight");
-  assert.equal(h.feedback.at(-1).text, "Correct!");
-  assert.equal(h.feedback.at(-1).detail, "0.80 seconds");
+  assert.equal(h.feedback.at(-1).text, "Correct! · 0.80 seconds");
   assert.equal(h.answers.length, 0);
   h.clock(1800); h.result("twenty eight", true);
   assert.equal(h.answers.length, 1);
   assert.equal(h.answers[0][2], 28);
   assert.equal(h.answers[0][3], 800);
-});
-
-test("slow live feedback keeps Correct while timing appears underneath", () => {
-  const h = harness(); h.startAudio();
-  h.clock(2100); h.result("twenty eight");
-  assert.equal(h.feedback.at(-1).text, "Correct!");
-  assert.equal(h.feedback.at(-1).detail, undefined);
-  h.recognition.onspeechstart(); h.result("twenty eight");
-  assert.equal(h.feedback.at(-1).text, "Correct!");
-  assert.equal(h.feedback.at(-1).tone, "good");
-  assert.equal(h.feedback.at(-1).detail, "Slow · 2.10 seconds");
-  assert.equal(h.feedback.at(-1).detailTone, "slow");
-  assert.equal(h.answers.length, 0);
 });
 
 test("one oh eight never flashes Wrong while its partial words are arriving",()=>{
@@ -553,7 +539,7 @@ test("practice feedback uses the inclusive 1.5-second cutoff and correct colors"
   }).outputText;
   for (const [parsed, elapsed, label, tone] of [
     [8, 1499, "Correct!", "good"], [8, 1500, "Correct!", "good"],
-    [8, 1501, "Correct!", "good"], [7, 700, "Wrong!", "wrong"],
+    [8, 1501, "Slow!", "slow"], [7, 700, "Wrong!", "wrong"],
     [null, 4000, "Wrong!", "wrong"],
   ]) {
     let feedback, waitingForNext;
@@ -577,11 +563,7 @@ test("practice feedback uses the inclusive 1.5-second cutoff and correct colors"
     context.respond({ id: "test", a: 3, b: 5, operation: "add" }, parsed === null ? "" : String(parsed), parsed, elapsed);
     assert.ok(feedback.text.startsWith(label));
     assert.equal(feedback.tone, tone);
-    if (parsed === 8) {
-      assert.equal(feedback.text, "Correct!");
-      assert.equal(feedback.detail, `${elapsed > 1500 ? "Slow · " : ""}${(elapsed / 1000).toFixed(2)} seconds`);
-      assert.equal(feedback.detailTone, elapsed > 1500 ? "slow" : "good");
-    } else assert.ok(feedback.text.includes("seconds"));
+    assert.ok(feedback.text.includes("seconds"));
     if (tone === "wrong") assert.equal(feedback.correctAnswer, 8);
     assert.equal(waitingForNext, parsed !== 8);
     assert.equal(timers.length, parsed === 8 ? 1 : 0);

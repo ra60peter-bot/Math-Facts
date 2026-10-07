@@ -20,7 +20,6 @@ import { RecentlyDeleted } from "./recently-deleted";
 import { BrandLogo } from "./brand-logo";
 import { StudentAvatar } from "./student-avatar";
 import { PracticeDialog } from "./practice-dialog";
-import { PracticeResult, type PracticeResultValue } from "./practice-result";
 import { defaultPreferences, readPreferences, PREFERENCES_KEY, microphoneConfirmed } from "../lib/practice-preferences";
 import { hasComparableTime, practiceMetrics } from "../lib/practice-metrics";
 import { CurrentUser } from "./current-user";
@@ -273,7 +272,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
   const [heard, setHeard] = useState("");
   const [speechReport, setSpeechReport] = useState("");
   const [listenState, setListenState] = useState("");
-  const [result, setResult] = useState<PracticeResultValue | null>(null);
+  const [result, setResult] = useState<{ text: string; tone: "good" | "slow" | "wrong"; correctAnswer?: number } | null>(null);
   const [pendingWrong, setPendingWrong] = useState<PendingWrong | null>(null);
   const [speechSupported, setSpeechSupported] = useState(true);
   const [localSpeechStatus, setLocalSpeechStatus] = useState<LocalSpeechStatus | "browser">("browser");
@@ -552,8 +551,8 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
     if (comparable) { statesRef.current = { ...statesRef.current, [card.id]: nextState }; setStates(statesRef.current); }
     setHeard(transcript || "No answer heard"); setListenState("");
     const elapsed = comparable && preferences.showTimes ? ` · ${(responseMs / 1000).toFixed(2)} seconds` : "";
-    setResult(answerCorrect
-      ? { text: "Correct!", tone: "good", detail: comparable ? (passed ? elapsed.replace(/^ · /, "") : `Slow${elapsed}`) : undefined, detailTone: passed ? "good" : "slow" }
+    setResult(passed ? { text: `Correct!${elapsed}`, tone: "good" }
+      : answerCorrect ? { text: comparable ? `Slow!${elapsed}` : "Correct!", tone: comparable ? "slow" : "good" }
       : { text: `Wrong!${elapsed}`, tone: "wrong", correctAnswer: answerFor(card) });
     if (!comparable) setListenState(retryRef.current ? "Retry practice · no speed or mastery result" : "Answer recorded · timing unavailable");
     if (answerCorrect && preferences.successSound) {
@@ -746,12 +745,9 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
         const awaitingTiming = retryRef.current || soundResponseMsRef.current === null;
         // A partial "one" can still become "one oh eight". Only a completed
         // answer may show Wrong; matching interim answers stay responsive.
-        const fast = latestResponseMs <= AUTOMATICITY_CONFIG.automaticityTargetMs;
-        setResult(!correct ? null : {
-          text: "Correct!", tone: "good",
-          detail: awaitingTiming ? undefined : fast ? elapsed.replace(/^ · /, "") : `Slow${elapsed}`,
-          detailTone: fast ? "good" : "slow",
-        });
+        setResult(!correct ? null : awaitingTiming
+          ? { text: "Correct!", tone: "good" }
+          : { text: `${latestResponseMs <= AUTOMATICITY_CONFIG.automaticityTargetMs ? "Correct!" : "Slow!"}${elapsed}`, tone: latestResponseMs <= AUTOMATICITY_CONFIG.automaticityTargetMs ? "good" : "slow" });
         if (!correct) setListenState("Listening — finishing your answer…");
       }
     };
@@ -994,7 +990,7 @@ function PracticeApp({ student, initialView = "practice", cloudUser, account = n
         <p className="eyebrow">{questionReady ? "Say just the answer" : "Wait for the microphone"}</p>
         <div className={`fact ${questionReady ? "" : "fact-preparing"}`}>{questionReady ? <>{current.a} {operationSymbol(current.operation)} {current.b}</> : "Get ready…"}</div>
         <div className="practice-feedback" aria-live="polite" aria-atomic="true">
-          <PracticeResult result={result} placeholder={questionReady ? "Say your answer aloud" : "Opening the microphone…"} />
+          <div className={`result ${result?.tone ?? ""}`}>{result?.text ?? (questionReady ? "Say your answer aloud" : "Opening the microphone…")}</div>
           {result?.correctAnswer !== undefined && <div className="answer-reveal">{current.a} {operationSymbol(operation)} {current.b} = {result.correctAnswer}</div>}
           {pendingWrong && <><p>Heard: <strong>{pendingWrong.transcript || "No answer"}</strong></p><button className="text-button" onClick={allowPendingAnswer}>That’s not what I said</button></>}
           {waitingForNext && <div className="answer-actions"><button className="button primary" onClick={advance}>{progress >= questionCount ? "See results" : "Next question"}</button></div>}
