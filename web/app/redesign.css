@@ -127,6 +127,10 @@ button:focus-visible, summary:focus-visible, a:focus-visible { outline:3px solid
 .redesign-practice .practice-feedback p { margin:0; font-size:15px; }
 .redesign-practice .practice-feedback small { color:var(--muted); }
 .redesign-practice .result { font-size:clamp(21px,3vh,29px); }
+.practice-result { display:grid; gap:7px; justify-items:center; align-content:start; min-height:68px; }
+.result-timing { font-size:clamp(18px,2.5vh,23px); font-weight:600; font-variant-numeric:tabular-nums; line-height:1.4; }
+.result-timing.good { color:var(--teal); }
+.result-timing.slow { color:var(--yellow); }
 .redesign-practice .answer-reveal { font-size:23px; }
 .redesign-practice .practice-controls { padding-top:17px; gap:20px; flex-wrap:nowrap; }
 .redesign-practice .speech-status small { color:var(--muted); font-size:12px; }
