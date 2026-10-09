@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, Fragment, useCallback, useContext, useEffect, useId, useRef, useState } from "react";
+import Link from "next/link";
 import { flushSync } from "react-dom";
 import type { User } from "@supabase/supabase-js";
 import { FactCard, answerFor, makeCards } from "../lib/cards";
@@ -1067,7 +1068,7 @@ function AppFrame({ children, view, onNavigate, onExit, isAdmin = false, account
   }
   return <div className="app-shell redesign-shell">
     <a className="skip-link" href="#workspace">Skip to main content</a>
-    <aside className="sidebar"><div className="sidebar-header"><BrandLogo/>
+    <aside className="sidebar"><div className="sidebar-header"><Link href="/" aria-label="Auto Math Facts home" style={{textDecoration:"none",color:"inherit"}} onClick={event => { event.preventDefault(); onExit(); onNavigate("practice"); }}><BrandLogo/></Link>
       <div className="sidebar-person">{avatarStudentId && <StudentAvatar studentId={avatarStudentId} name={accountName ?? "Student"} editable/>}{accountName && <CurrentUser name={accountName} role={profileAccess.student ? "My workspace" : isAdmin ? "Admin" : "Account owner"}/>}</div></div>
       <div className="sidebar-navigation"><nav className="nav" aria-label="Main navigation">
         <button aria-current={view === "practice" ? "page" : undefined} onClick={() => { onExit(); onNavigate("practice"); }}>✦ Practice</button>
@@ -1075,7 +1076,7 @@ function AppFrame({ children, view, onNavigate, onExit, isAdmin = false, account
         <button aria-current={view === "history" ? "page" : undefined} onClick={() => onNavigate("history")}>◷ History</button>
         {!profileAccess.student && <button aria-current={view === "students" ? "page" : undefined} onClick={() => onNavigate("students")}>Family controls</button>}
         {isAdmin && hasSupabaseConfig() && <button aria-current={view === "users" ? "page" : undefined} onClick={() => onNavigate("users")}>Admin</button>}
-      </nav>{profileAccess.switchPerson && <button className="text-button switch-user" onClick={() => void signOut()}>⇄ Switch User</button>}</div>
+      </nav>{profileAccess.switchPerson && <button className="text-button switch-user" onClick={() => void signOut()}>{isAdmin ? "Sign out / Switch User" : "Switch User"}</button>}</div>
       <div className="account"><button className="text-button" onClick={onPreferences}>⚙ Make it comfortable</button><p>Small steps.<br/>Stronger recall.</p></div>
     </aside><main id="workspace" className="main">{children}</main>
   </div>;

@@ -15,11 +15,12 @@ function database(seed={}) {
  const tables={profiles:[{id:'owner',email:'owner@example.test',role:'user',access_status:'active'},{id:'other',role:'user',access_status:'active'}],students:[{id:'alice',owner_id:'owner',display_name:'Alice'},{id:'bob',owner_id:'owner',display_name:'Bob'},{id:'outside',owner_id:'other',display_name:'Other'}],access_devices:[],access_grants:[],...seed};
  const service={auth:{admin:{getUserById:async id=>({data:{user:{id}}})},getUser:async()=>({data:{user:{id:'owner'}}})},from(table){
  let filters=[],action='read',values;
- const q={select:()=>q,is:(k,v)=>{filters.push(r=>(r[k]??null)===v);return q;},eq:(k,v)=>{filters.push(r=>r[k]===v);return q;},gt:(k,v)=>{filters.push(r=>r[k]>v);return q;},order:()=>q,delete:()=>{action='delete';return q;},insert:v=>{action='insert';values=v;return q;},upsert:v=>{action='upsert';values=v;return q;},single:async()=>execute(true),maybeSingle:async()=>execute(true),then:(resolve,reject)=>Promise.resolve(execute(false)).then(resolve,reject)};
+ const q={select:()=>q,is:(k,v)=>{filters.push(r=>(r[k]??null)===v);return q;},eq:(k,v)=>{filters.push(r=>r[k]===v);return q;},gt:(k,v)=>{filters.push(r=>r[k]>v);return q;},order:()=>q,update:v=>{action='update';values=v;return q;},delete:()=>{action='delete';return q;},insert:v=>{action='insert';values=v;return q;},upsert:v=>{action='upsert';values=v;return q;},single:async()=>execute(true),maybeSingle:async()=>execute(true),then:(resolve,reject)=>Promise.resolve(execute(false)).then(resolve,reject)};
  function execute(single) {
   if(action==='insert')tables[table].push({id:'device',...values});
   if(action==='upsert'){tables[table]=tables[table].filter(r=>r.device_id!==values.device_id);tables[table].push({...values});}
   const found=tables[table].filter(r=>filters.every(f=>f(r)));
+  if(action==='update')found.forEach(r=>Object.assign(r,values));
   if(action==='delete')tables[table]=tables[table].filter(r=>!filters.every(f=>f(r)));
   return {data:single?found[0]??null:found,error:null};
  }
@@ -32,11 +33,11 @@ function setup(){
  const db=database();
  const server=compile('lib/access-server.ts',{'node:crypto':crypto,'@supabase/supabase-js':{createClient:()=>db.service}});
  db.tables.access_devices.push({id:'device',owner_id:'owner',token_hash:server.hashToken('cookie'),expires_at:expires});
- const req=(token='',body={},method='POST',origin='https://app.test')=>({method,nextUrl:new URL('https://app.test/api/access'),headers:new Headers({origin,'x-math-access':token}),cookies:{get:()=>({value:'cookie'})},json:async()=>body});
+ const req=(token='',body={},method='POST',origin='https://app.test')=>({method,nextUrl:new URL('https://app.test/api/access'),headers:new Headers({origin,'x-math-access':token}),cookies:{get:name=>name==='math-facts-device'?{value:'cookie'}:undefined},json:async()=>body});
  const admin=compile('lib/admin-server.ts',{'./access-server':server});
  return {...db,server,req,admin};
 }
-const NextResponse={json:(body,options={})=>({body,status:options.status??200,headers:options.headers??new Headers(),cookies:{set(){}}})};
+const NextResponse={json:(body,options={})=>({body,status:options.status??200,headers:options.headers??new Headers(),cookies:{values:new Map(),set(name,value,options){this.values.set(name,{value,...options});},get(name){return this.values.get(name);}}})};
 
 test('a remembered device without a grant has no management or progress access',async()=>{
  const s=setup();
@@ -185,4 +186,64 @@ test('recovery UI restores the selected profile, refreshes active lists, and rep
  assert.equal(refreshed,1);assert.match(JSON.stringify(render()),/Alice was restored with their saved history/);
  assert.equal(nodes(render()).filter(n=>n.type==='button').length,0);
  assert.deepEqual(calls.filter(c=>c[1]==='PATCH'),[['/api/students/alice','PATCH'],['/api/students/alice','PATCH']]);
+});
+
+function accessRoute(s,good=true) {
+ return compile('app/api/access/route.ts',{'next/server':{NextResponse},'../../../lib/access-server':{...s.server,serviceClient:()=>s.service},'@supabase/supabase-js':{createClient:()=>({auth:{signInWithPassword:async()=>good?{data:{user:{id:'owner'}}}:{data:{user:null},error:{message:'bad'}}}})}});
+}
+function withAdminCookie(s,token,body={action:'resume'}) {
+ const req=s.req('',body);req.cookies.get=name=>({value:name==='math-facts-admin'?token:'cookie'});return req;
+}
+test('admin login survives refresh beyond eight hours and renews only the authenticated grant',async()=>{
+ const s=setup();s.tables.profiles[0].role='admin';const route=accessRoute(s);
+ const login=await route.POST(s.req('',{action:'login',email:'owner@example.test',password:'correct'}));
+ assert.equal(login.status,200);
+ assert.ok(Date.parse(s.tables.access_grants[0].expires_at)>Date.now()+24*3600000);
+ assert.ok(Date.parse(s.tables.access_devices[0].expires_at)>Date.now()+90*86400000);
+ const resumed=await route.POST(withAdminCookie(s,login.body.token));
+ assert.equal(resumed.body.session.profile.role,'admin');assert.equal(resumed.body.session.token,login.body.token);
+ const cookie=resumed.cookies.get('math-facts-admin');assert.equal(cookie.httpOnly,true);assert.equal(cookie.sameSite,'strict');assert.ok(cookie.maxAge>0);
+ await route.POST(withAdminCookie(s,login.body.token,{action:'lock'}));
+ const afterLogout=await route.POST(withAdminCookie(s,login.body.token));
+ assert.equal(afterLogout.body.session,null);assert.equal(afterLogout.cookies.get('math-facts-admin').maxAge,0);
+ assert.equal(s.tables.access_grants.length,0);
+});
+test('admin Google connect persists; student selection invalidates persistent admin access',async()=>{
+ const s=setup();s.tables.profiles[0].role='admin';const route=accessRoute(s);
+ const connect=s.req('',{action:'connect'});connect.headers.set('authorization','Bearer test');
+ const login=await route.POST(connect);assert.equal(login.status,200);
+ assert.ok((await route.POST(withAdminCookie(s,login.body.token))).body.session);
+ const selected=await route.POST(withAdminCookie(s,login.body.token,{action:'student',studentId:'alice'}));
+ assert.equal(selected.body.mode,'student');assert.equal(selected.cookies.get('math-facts-admin').maxAge,0);
+ assert.equal((await route.POST(withAdminCookie(s,login.body.token))).body.session,null);
+});
+test('resume rejects device-only, ordinary owner, student, revoked, blocked, deleted and cross-origin access',async()=>{
+ const s=setup(),route=accessRoute(s);
+ assert.equal((await route.POST(s.req('',{action:'resume'}))).body.session,null);
+ const owner=await s.server.issueGrant('device','owner',null,s.service);
+ assert.equal((await route.POST(withAdminCookie(s,owner))).body.session,null);
+ s.tables.profiles[0].role='admin';
+ const student=await s.server.issueGrant('device','student','alice',s.service);
+ assert.equal((await route.POST(withAdminCookie(s,student))).body.session,null);
+ const admin=await s.server.issueGrant('device','owner',null,s.service);
+ const external=withAdminCookie(s,admin);external.headers.set('origin','https://evil.test');
+ assert.equal((await route.POST(external)).status,403);
+ s.tables.profiles[0].access_status='blocked';assert.equal((await route.POST(withAdminCookie(s,admin))).body.session,null);
+ s.tables.profiles[0].access_status='active';s.tables.profiles[0].deleted_at='2026-01-01';assert.equal((await route.POST(withAdminCookie(s,admin))).body.session,null);
+ s.tables.profiles[0].deleted_at=null;await s.server.revokeDeviceGrants('device',s.service);
+ assert.equal((await route.POST(withAdminCookie(s,admin))).body.session,null);
+});
+
+test('ProfileGate resumes an admin on mount without locking the browser or asking for credentials',async()=>{
+ const calls=[],effects=[],values=[];let cursor=0;
+ const session={token:'resumed',mode:'owner',profile:{id:'admin',role:'admin'}};
+ const gate=compile('components/profile-gate.tsx',{
+  react:{createContext:()=>({Provider:'provider'}),useState:initial=>{const i=cursor++;values[i]=initial;return [values[i],v=>{values[i]=v;}];},useRef:()=>({current:null}),useEffect:fn=>effects.push(fn)},
+  'react/jsx-runtime':{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})},
+  '../lib/access-client':{setAccessToken:token=>calls.push(['token',token]),accessRequest:async(path,init)=>{calls.push(['request',JSON.parse(init.body).action]);return {session};}},
+  '../lib/supabase-browser':{supabaseBrowser:()=>{throw new Error('Should not request Google authentication');}},
+ });
+ gate.ProfileGate({children:()=>null});effects[0]();await new Promise(resolve=>setImmediate(resolve));
+ assert.deepEqual(calls.filter(c=>c[0]==='request'),[['request','resume']]);
+ assert.deepEqual(calls.at(-1),['token','resumed']);assert.ok(values.includes(session));
 });

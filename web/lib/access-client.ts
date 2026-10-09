@@ -1,4 +1,4 @@
-// Access grants live in memory only. Reloading returns to the identity picker.
+// API grants live in memory; admins can resume via a separate HttpOnly cookie.
 let accessToken = "";
 export const getAccessToken = () => accessToken;
 export const setAccessToken = (token: string) => { accessToken = token; };

@@ -301,3 +301,7 @@ Speech tests use real callbacks with a mocked recognizer and deterministic clock
 The established workflow is edit, test/build, commit explicit files, push main, then verify Vercel production deployment by matching the commit. Existing session authorization covered these routine app updates. Never claim “live” from a successful push alone. Credentials and service-role data must not enter Git, logs, or handoff documents.
 
 Prior browser tool handles and tabs are machine/session-specific; rediscover them. The laptop working tree was clean before adding this document. No database changes were made by the recent speech fixes.
+
+## Publishing preference (2026-10-09)
+The user requests automatic publishing after relevant tests/checks pass. Do not ask for another publishing approval unless the user specifically requests a local preview or a separate approval is required. Preserve unrelated unfinished work.
+

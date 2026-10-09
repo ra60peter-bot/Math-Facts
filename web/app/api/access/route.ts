@@ -1,6 +1,6 @@
 import {createClient} from "@supabase/supabase-js";
 import {NextRequest,NextResponse} from "next/server";
-import {accountProfile,DEVICE_COOKIE,issueGrant,readDevice,registerDevice,revokeDeviceGrants,sameOrigin,serviceClient} from "../../../lib/access-server";
+import {ADMIN_COOKIE,clearAdminSession,readAccess,rememberAdminSession,accountProfile,DEVICE_COOKIE,issueGrant,readDevice,registerDevice,revokeDeviceGrants,sameOrigin,serviceClient} from "../../../lib/access-server";
 
 export async function GET(request:NextRequest) {
   try {
@@ -17,9 +17,24 @@ export async function POST(request:NextRequest) {
   if(!sameOrigin(request))return NextResponse.json({error:"This request must come from Math Facts."},{status:403});
   try {
     const body=await request.json(),service=serviceClient(),device=await readDevice(request,service);
+    if(body.action==="resume") {
+      const token=request.cookies.get(ADMIN_COOKIE)?.value;
+      if(!token)return NextResponse.json({session:null});
+      let access;
+      try {access=await readAccess(request,token);} catch {
+        const response=NextResponse.json({session:null});clearAdminSession(response);return response;
+      }
+      if(access.profile.role!=="admin"||access.grant.mode!=="owner") {
+        const response=NextResponse.json({session:null});clearAdminSession(response);return response;
+      }
+      const response=NextResponse.json({session:{token,mode:"owner",profile:access.profile}});
+      await rememberAdminSession(request,response,access.device.id,token,service);
+      return response;
+    }
     if(body.action==="lock" || body.action==="forget") {
       if(device)await revokeDeviceGrants(device.id,service);
       const response=NextResponse.json({ok:true});
+      clearAdminSession(response);
       if(body.action==="forget") {
         if(device){const {error}=await service.from("access_devices").delete().eq("id",device.id);if(error)throw new Error("Could not forget this device.");}
         response.cookies.set(DEVICE_COOKIE,"",{httpOnly:true,path:"/",maxAge:0});
@@ -32,7 +47,8 @@ export async function POST(request:NextRequest) {
       const {data:student,error}=await service.from("students").select("id,owner_id,display_name,created_at").eq("id",String(body.studentId)).is("deleted_at",null).eq("owner_id",device.owner_id).single();
       if(error || !student)throw new Error("Student not found on this account.");
       const token=await issueGrant(device.id,"student",student.id,service);
-      return NextResponse.json({token,mode:"student",profile,student:{id:student.id,ownerId:student.owner_id,name:student.display_name,createdAt:student.created_at}});
+      const response=NextResponse.json({token,mode:"student",profile,student:{id:student.id,ownerId:student.owner_id,name:student.display_name,createdAt:student.created_at}});
+      clearAdminSession(response);return response;
     }
     if(body.action==="login") {
       const email=String(body.email??"").trim().toLowerCase(),password=String(body.password??"");
@@ -44,6 +60,8 @@ export async function POST(request:NextRequest) {
       const profile=await accountProfile(data.user.id,service),envelope=NextResponse.json({});
       const registered=await registerDevice(request,envelope,profile.id,service);
       const token=await issueGrant(registered.id,"owner",null,service);
+      if(profile.role==="admin")await rememberAdminSession(request,envelope,registered.id,token,service);
+      else clearAdminSession(envelope);
       // No Supabase access/refresh token is sent back to this shared browser.
       return NextResponse.json({token,mode:"owner",profile},{headers:envelope.headers});
     }
@@ -57,6 +75,8 @@ export async function POST(request:NextRequest) {
       // The administrator retains Google sign-in. Regular owners always unlock
       // management with a password, even when connecting an old Google session.
       const token=profile.role==="admin"?await issueGrant(registered.id,"owner",null,service):null;
+      if(token)await rememberAdminSession(request,envelope,registered.id,token,service);
+      else clearAdminSession(envelope);
       return NextResponse.json({profile,token,mode:token?"owner":"picker"},{headers:envelope.headers});
     }
     return NextResponse.json({error:"Unknown access action."},{status:400});

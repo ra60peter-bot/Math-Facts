@@ -25,6 +25,8 @@ export function ProfileGate({children}:{children:(session:ProfileSession)=>React
       const handoff=takeOnboardingSession();
       if(handoff)return {session:handoff};
       setAccessToken("");
+      const resumed=await accessRequest("/api/access",{method:"POST",body:JSON.stringify({action:"resume"})});
+      if(resumed.session)return resumed;
       await accessRequest("/api/access",{method:"POST",body:JSON.stringify({action:"lock"})});
       const client=supabaseBrowser(),auth=await client?.auth.getSession();
       if(auth?.data.session){

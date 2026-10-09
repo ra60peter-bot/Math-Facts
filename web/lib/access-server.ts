@@ -4,6 +4,8 @@ import {createClient} from "@supabase/supabase-js";
 import {NextRequest, NextResponse} from "next/server";
 
 export const DEVICE_COOKIE = "math-facts-device";
+export const ADMIN_COOKIE = "math-facts-admin";
+const ADMIN_AGE = 400 * 86400;
 const DEVICE_AGE = 90 * 86400;
 export function serviceClient() {
   const url=process.env.NEXT_PUBLIC_SUPABASE_URL, key=process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -45,9 +47,9 @@ export async function issueGrant(deviceId:string,mode:"owner"|"student",studentI
   if(error)throw new Error("Could not open this profile.");
   return token;
 }
-export async function readAccess(request:NextRequest) {
+export async function readAccess(request:NextRequest, suppliedToken?:string) {
   const service=serviceClient(),device=await readDevice(request,service);
-  const token=request.headers.get("x-math-access");
+  const token=suppliedToken ?? request.headers.get("x-math-access");
   if(!device || !token)throw new Error("Choose your profile to continue.");
   const {data:grant,error}=await service.from("access_grants").select("mode,student_id").eq("device_id",device.id).eq("token_hash",hashToken(token)).gt("expires_at",new Date().toISOString()).maybeSingle();
   if(error || !grant)throw new Error("This profile is locked. Choose your profile again.");
@@ -61,4 +63,20 @@ export async function requireStudentAccess(request:NextRequest,studentId:string)
   if(error||!student|| (student.owner_id!==access.device.owner_id && !(access.grant.mode==="owner"&&access.profile.role==="admin")))throw new Error("Student access is not permitted.");
   await accountProfile(student.owner_id, access.service);
   return {...access,student};
+}
+
+// A separate HttpOnly credential resumes only an already authenticated admin.
+// The remembered device cookie alone can never unlock management.
+export function clearAdminSession(response:NextResponse) {
+  response.cookies.set(ADMIN_COOKIE,"",{httpOnly:true,secure:process.env.NODE_ENV==="production",sameSite:"strict",path:"/",maxAge:0});
+}
+export async function rememberAdminSession(request:NextRequest,response:NextResponse,deviceId:string,token:string,service=serviceClient()) {
+  const expiresAt=new Date(Date.now()+ADMIN_AGE*1000).toISOString();
+  const {data:grant,error}=await service.from("access_grants").update({expires_at:expiresAt}).eq("device_id",deviceId).eq("token_hash",hashToken(token)).eq("mode","owner").select("device_id").single();
+  if(error||!grant)throw new Error("Could not remember the administrator session.");
+  const {error:deviceError}=await service.from("access_devices").update({expires_at:expiresAt}).eq("id",deviceId);
+  if(deviceError)throw new Error("Could not remember the administrator device.");
+  response.cookies.set(ADMIN_COOKIE,token,{httpOnly:true,secure:process.env.NODE_ENV==="production",sameSite:"strict",path:"/",maxAge:ADMIN_AGE});
+  const deviceToken=response.cookies.get(DEVICE_COOKIE)?.value??request.cookies.get(DEVICE_COOKIE)?.value;
+  if(deviceToken)response.cookies.set(DEVICE_COOKIE,deviceToken,{httpOnly:true,secure:process.env.NODE_ENV==="production",sameSite:"lax",path:"/",maxAge:ADMIN_AGE});
 }
