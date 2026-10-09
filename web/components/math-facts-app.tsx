@@ -1267,16 +1267,22 @@ function UserManagement({ currentUserId }: { currentUserId: string }) {
 
   useEffect(() => { void loadUsers(); }, [loadUsers]);
 
-  async function invite(event: FormEvent) {
-    event.preventDefault();
+  const [sendingInvitation, setSendingInvitation] = useState(false);
+  async function sendInvitation(address: string) {
+    if (sendingInvitation) return;
+    setSendingInvitation(true);
     try {
-      await accountRequest("/api/invites", { method: "POST", body: JSON.stringify({ email }) });
-      setMessage(`Invitation sent to ${email}.`);
+      const payload = await accountRequest("/api/invites", { method: "POST", body: JSON.stringify({ email: address }) });
+      setMessage(payload.message ?? `A fresh setup email was sent to ${address}.`);
       setEmail("");
       await loadUsers();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "The invitation could not be sent.");
-    }
+    } finally { setSendingInvitation(false); }
+  }
+  async function invite(event: FormEvent) {
+    event.preventDefault();
+    await sendInvitation(email);
   }
 
   async function deleteUser(user: ManagedUser) {
@@ -1319,9 +1325,9 @@ function UserManagement({ currentUserId }: { currentUserId: string }) {
     }
   }
 
-  return <div className="users-view"><div className="topbar"><div><h1>Admin</h1><p className="muted">Invite account owners, manage every student, and review all performance.</p></div></div><section className="user-toolbar"><h2>Invite user</h2><form className="form-row" onSubmit={invite}><label>Email<input type="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></label><button className="button primary">Send invitation</button></form>{message && <p className="notice">{message}</p>}</section><section><h2>Accounts</h2>{loading ? <p className="empty">Loading users...</p> : users.length === 0 ? <p className="empty">No users found.</p> : <div className="table-scroll"><table className="history-table"><thead><tr><th>User</th><th>Status</th><th>Students</th><th>Sessions</th><th>Actions</th></tr></thead><tbody>{users.map((user) => {
+  return <div className="users-view"><div className="topbar"><div><h1>Admin</h1><p className="muted">Invite account owners, manage every student, and review all performance.</p></div></div><section className="user-toolbar"><h2>Invite or resend</h2><p className="muted">Existing accounts receive a fresh password setup link. Inviting a recently deleted account restores it with its students and history.</p><form className="form-row" onSubmit={invite}><label>Email<input type="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></label><button className="button primary" disabled={sendingInvitation}>{sendingInvitation ? "Sending…" : "Send invitation / resend"}</button></form>{message && <p className="notice">{message}</p>}</section><section><h2>Accounts</h2>{loading ? <p className="empty">Loading users...</p> : users.length === 0 ? <p className="empty">No users found.</p> : <div className="table-scroll"><table className="history-table"><thead><tr><th>User</th><th>Status</th><th>Students</th><th>Sessions</th><th>Actions</th></tr></thead><tbody>{users.map((user) => {
     const allSessions = user.students.flatMap((student) => student.sessions);
-    return <tr key={user.id}><td><strong>{user.displayName || user.email}</strong>{user.role === "admin" && <span className="role-label">Admin</span>}<br /><span className="muted">{user.email}</span></td><td>{user.status}</td><td>{user.students.length}</td><td>{allSessions.length}</td><td><div className="table-actions"><button className="button secondary" onClick={() => { setSelectedUserId(user.id); setSelectedStudentId(""); }}>Manage</button>{user.role !== "admin" && user.id !== currentUserId && <button className="button danger" onClick={() => void deleteUser(user)}>Delete user</button>}</div></td></tr>;
+    return <tr key={user.id}><td><strong>{user.displayName || user.email}</strong>{user.role === "admin" && <span className="role-label">Admin</span>}<br /><span className="muted">{user.email}</span></td><td>{user.status}</td><td>{user.students.length}</td><td>{allSessions.length}</td><td><div className="table-actions"><button className="button secondary" onClick={() => { setSelectedUserId(user.id); setSelectedStudentId(""); }}>Manage</button>{user.role !== "admin" && <button className="button secondary" disabled={sendingInvitation} onClick={() => void sendInvitation(user.email)}>Resend setup email</button>}{user.role !== "admin" && user.id !== currentUserId && <button className="button danger" onClick={() => void deleteUser(user)}>Delete user</button>}</div></td></tr>;
   })}</tbody></table></div>}</section>{selectedUser && <section className="user-history"><h2>{selectedUser.displayName || selectedUser.email} students</h2><form className="form-row" onSubmit={addStudent}><label>Student name<input type="text" required maxLength={60} value={studentName} onChange={(event) => setStudentName(event.target.value)} /></label><button className="button primary">Add student</button></form>{selectedUser.students.length === 0 ? <p className="empty">No students yet.</p> : <div className="table-scroll"><table className="history-table"><thead><tr><th>Student</th><th>Added</th><th>Sessions</th><th>Actions</th></tr></thead><tbody>{selectedUser.students.map((student) => <tr key={student.id}><td><strong>{student.name}</strong></td><td>{new Date(student.createdAt).toLocaleDateString()}</td><td>{student.sessions.length}</td><td><div className="table-actions"><button className="button secondary" onClick={() => setSelectedStudentId(student.id)}>View history</button><button className="button danger" onClick={() => void deleteStudent(student)}>Delete student</button></div></td></tr>)}</tbody></table></div>}{selectedStudent && <div className="user-history"><h2>{selectedStudent.name} history</h2><HistoryProgress key={selectedStudent.id} name={selectedStudent.name} sessions={selectedStudent.sessions} progress={selectedStudent.reportProgress}><AdminSessionHistory sessions={selectedStudent.sessions} /></HistoryProgress></div>}</section>}<RecentlyDeleted refreshKey={users} onRestored={loadUsers} /></div>;
 }
 

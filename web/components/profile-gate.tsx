@@ -5,6 +5,7 @@ import {flushProgressWrites} from "../lib/cloud-progress";
 import {StudentAvatar} from "./student-avatar";
 import {BrandLogo} from "./brand-logo";
 import {supabaseBrowser} from "../lib/supabase-browser";
+import Link from "next/link";
 
 export type AccessProfile={id:string;email:string;displayName:string|null;role:"admin"|"user";status:"active"|"blocked"};
 export type AccessStudent={id:string;ownerId:string;name:string;createdAt:string};
@@ -94,6 +95,7 @@ export function ProfileGate({children}:{children:(session:ProfileSession)=>React
       <button className="button secondary" disabled={busy} onClick={()=>void forget()}>Use a different account / forget this device</button>
     </>:<>
       <h2>{profile?"Unlock account owner":"Account owner sign-in"}</h2>
+      <p className="muted">New here or invitation link expired? <Link href="/join">Get a fresh setup link</Link>.</p>
       <form className="identity-form" onSubmit={signIn}>
         <label>Email<input type="email" autoComplete="username" required readOnly={Boolean(profile)} value={profile?.email??email} onChange={e=>setEmail(e.target.value)} /></label>
         <label>Password<input type="password" autoComplete="current-password" required value={password} onChange={e=>setPassword(e.target.value)} /></label>
